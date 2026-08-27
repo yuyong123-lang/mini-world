@@ -33,6 +33,9 @@ function makeBoxMesh(color: number, w: number, h: number): THREE.Mesh {
 }
 import { SkySystem } from './render/sky';
 import { ParticleSystem, tileAverageColor } from './render/particles';
+import { initAudio, setMasterVolume, sfx } from './audio/audio';
+import { Settings, type SettingsData } from './core/settings';
+import { viewDistanceToFog } from './ui/menu';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
 import {
@@ -115,6 +118,27 @@ function boot(): void {
   player.spawnPoint = { ...world.spawnPoint };
   const stats = new StatsSystem(player, bus);
   player.addJumpHook(() => stats.notifyJump());
+
+  // ---- 设置与音效（W11 接线：T103/T104 消费端）----
+  const settings: SettingsData = Settings.load();
+  setMasterVolume(settings.volume);
+  player.setSensitivity(settings.sensitivity);
+  document.addEventListener('click', initAudio, { once: true });
+  {
+    // 视距生效：雾距按 settings 缩放（World 加载半径热更留待后续版本，当前用常量半径）
+    const f = viewDistanceToFog(Math.min(settings.viewDistance, 6));
+    const fog = renderer.scene.fog;
+    if (fog && 'near' in fog && 'far' in fog) {
+      fog.near = f.near;
+      fog.far = f.far;
+    }
+  }
+
+  // ---- 音效事件映射 ----
+  bus.on('blockBroken', () => sfx('break'));
+  bus.on('damage', () => sfx('hurt'));
+  bus.on('pickup', () => sfx('pickup'));
+  bus.on('death', () => sfx('hurt', 1.6));
 
   // ---- 交互 ----
   player.bind(app);
@@ -212,6 +236,7 @@ function boot(): void {
     if (world.getBlock(pos.x, pos.y, pos.z) !== BLOCK.AIR) return;
     world.setBlock(pos.x, pos.y, pos.z, itemDef.place);
     inv.consumeHeld(1);
+    sfx('place');
     bus.emit('invChanged', {});
   });
 
@@ -228,6 +253,7 @@ function boot(): void {
     lastEatAt = nowMs;
     stats.eat(itemDef.food.hunger);
     inv.consumeHeld(1);
+    sfx('eat');
     hud.showToast(`吃了${itemDef.name} +${itemDef.food.hunger} 饥饿`);
   });
 

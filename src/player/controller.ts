@@ -10,8 +10,8 @@ import type { Vec3 } from '../core/types';
 import { moveWithCollisions } from '../physics/collide';
 import type { PhysicsBody } from '../physics/collide';
 
-/** 视角灵敏度（弧度/像素），任务 T22 指定 0.0022 */
-const MOUSE_SENS = 0.0022;
+/** 视角灵敏度默认值（弧度/像素），任务 T22 指定 0.0022；运行期可经 setSensitivity 修改 */
+const MOUSE_SENS_DEFAULT = 0.0022;
 /** pitch 夹持极限：±89° ≈ ±1.5533 rad（防止过顶翻转出现万向锁） */
 const PITCH_LIMIT = 1.5533;
 /** 眼高（格）。注意：契约 constants.ts 没有 EYE_HEIGHT，故就地定义；
@@ -135,11 +135,18 @@ export class PlayerController implements PhysicsBody {
 
   private readonly onMouseMove = (e: MouseEvent): void => {
     if (!this.locked) return;
-    this.yaw -= e.movementX * MOUSE_SENS;
-    this.pitch -= e.movementY * MOUSE_SENS;
+    const sens = this.sensitivity ?? MOUSE_SENS_DEFAULT;
+    this.yaw -= e.movementX * sens;
+    this.pitch -= e.movementY * sens;
     if (this.pitch > PITCH_LIMIT) this.pitch = PITCH_LIMIT;
     else if (this.pitch < -PITCH_LIMIT) this.pitch = -PITCH_LIMIT;
   };
+
+  /** 设置视角灵敏度（弧度/像素）；设置页（W10/T104）运行期生效入口 */
+  setSensitivity(radPerPx: number): void {
+    if (Number.isFinite(radPerPx) && radPerPx > 0) this.sensitivity = radPerPx;
+  }
+  private sensitivity: number | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!PlayerController.TRACKED_CODES.has(e.code)) return;
