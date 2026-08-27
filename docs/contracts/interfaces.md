@@ -131,7 +131,7 @@ export class BlockRegistry {
 | 8 | log_top | 20 | sun |
 | 9 | planks | 21 | moon |
 | 10 | leaves | 22 | apple(占位item图标) |
-| 11 | glass | 23 | crack_overlay(挖掘裂纹10帧备用区起点，tile 23..32) |
+| 11 | glass | 24 | water(半透明蓝微波)；crack_overlay 十帧挖掘裂纹 → tile 34..43(修订：原 23..32 与 water 冲突) |
 
 `BlockDef.tex` 使用本表。UV 计算统一由 atlas.ts 导出的工具函数完成（含半 texel inset）：
 
