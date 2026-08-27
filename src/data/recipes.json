@@ -1,0 +1,50 @@
+[
+  {
+    "out": { "key": "ITEM_PLANKS", "count": 4 },
+    "shapeless": ["ITEM_LOG"],
+    "size": 2
+  },
+  {
+    "out": { "key": "ITEM_CRAFT_TABLE", "count": 1 },
+    "shaped": ["PP", "PP"],
+    "map": { "P": ["ITEM_PLANKS"] },
+    "size": 2
+  },
+  {
+    "out": { "key": "ITEM_STICK", "count": 4 },
+    "shaped": ["P", "P"],
+    "map": { "P": ["ITEM_PLANKS"] },
+    "size": 2
+  },
+  {
+    "out": { "key": "ITEM_WOOD_PICKAXE", "count": 1 },
+    "shaped": ["PPP", ".S.", ".S."],
+    "map": { "P": ["ITEM_PLANKS"], "S": ["ITEM_STICK"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_WOOD_AXE", "count": 1 },
+    "shaped": ["PP", "PS", ".S"],
+    "map": { "P": ["ITEM_PLANKS"], "S": ["ITEM_STICK"] },
+    "allowMirror": true,
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_WOOD_SWORD", "count": 1 },
+    "shaped": ["P", "P", "S"],
+    "map": { "P": ["ITEM_PLANKS"], "S": ["ITEM_STICK"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_STONE_PICKAXE", "count": 1 },
+    "shaped": ["CCC", ".S.", ".S."],
+    "map": { "C": ["ITEM_COBBLE"], "S": ["ITEM_STICK"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_STONE_SWORD", "count": 1 },
+    "shaped": ["C", "C", "S"],
+    "map": { "C": ["ITEM_COBBLE"], "S": ["ITEM_STICK"] },
+    "size": 3
+  }
+]

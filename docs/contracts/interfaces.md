@@ -307,10 +307,13 @@ export class EventBus<T extends Record<string, unknown>> {
   on<K extends keyof T>(k: K, fn: (p: T[K]) => void): () => void;
   emit<K extends keyof T>(k: K, p: T[K]): void;
 }
-// GameEvents 约定键（W0 定义于 core/events.ts 中导出）：
+// GameEvents 约定键（W0 定义于 core/events.ts 中导出；修订记录见下）：
 //   hp:{v:number} hunger:{v:number} death:{} damage:{amount:number,from?:Vec3}
 //   invChanged:{} toast:{msg:string} pickup:{key:string,count:number}
 //   dayTick:{isNight:boolean} blockBroken:{pos:Vec3,id:number} mobKilled:{drops:ItemStack[]}
+//   dropAtPlayer:{stack:ItemStack}
+// 修订(W4)：GameEvents 由 interface 改为 type 别名——EventBus<T extends Record<string,unknown>>
+// 需要隐式索引签名，interface 不满足；新增 dropAtPlayer 键（背包放不下的物品落地）。
 ```
 
 ## §12 玩家 / 实体 / 战斗

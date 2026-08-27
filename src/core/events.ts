@@ -3,7 +3,12 @@
 
 import type { ItemStack, Vec3 } from './types';
 
-export interface GameEvents {
+/**
+ * 全局事件键约定。用 type 别名而非 interface：
+ * EventBus<T extends Record<string, unknown>> 需要 T 具备隐式索引签名，
+ * TS 的 interface 不满足（TS2347/TS2344 隐患），type 映射对象天然满足。
+ */
+export type GameEvents = {
   hp: { v: number };
   hunger: { v: number };
   death: Record<string, never>;
@@ -14,7 +19,9 @@ export interface GameEvents {
   dayTick: { isNight: boolean };
   blockBroken: { pos: Vec3; id: number };
   mobKilled: { drops: ItemStack[] };
-}
+  /** UI 关闭时背包放不下的物品，由 main 转成世界掉落物 */
+  dropAtPlayer: { stack: ItemStack };
+};
 
 export class EventBus<T extends Record<string, unknown>> {
   private map = new Map<keyof T, Set<(p: never) => void>>();
@@ -36,3 +43,4 @@ export class EventBus<T extends Record<string, unknown>> {
     for (const fn of [...set]) fn(p as never);
   }
 }
+

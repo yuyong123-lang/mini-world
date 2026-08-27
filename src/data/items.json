@@ -1,0 +1,34 @@
+[
+  { "key": "ITEM_STONE", "name": "石头", "stackMax": 64, "place": 2, "iconTile": 3 },
+  { "key": "ITEM_COBBLE", "name": "圆石", "stackMax": 64, "place": 3, "iconTile": 4 },
+  { "key": "ITEM_DIRT", "name": "泥土", "stackMax": 64, "place": 4, "iconTile": 2 },
+  { "key": "ITEM_SAND", "name": "沙子", "stackMax": 64, "place": 6, "iconTile": 5 },
+  { "key": "ITEM_SANDSTONE", "name": "砂岩", "stackMax": 64, "place": 7, "iconTile": 6 },
+  { "key": "ITEM_LOG", "name": "原木", "stackMax": 64, "place": 8, "iconTile": 7 },
+  { "key": "ITEM_PLANKS", "name": "木板", "stackMax": 64, "place": 9, "iconTile": 9 },
+  { "key": "ITEM_LEAVES", "name": "树叶", "stackMax": 64, "place": 10, "iconTile": 10 },
+  { "key": "ITEM_GLASS", "name": "玻璃", "stackMax": 64, "place": 11, "iconTile": 11 },
+  { "key": "ITEM_SNOW", "name": "雪块", "stackMax": 64, "place": 13, "iconTile": 15 },
+  { "key": "ITEM_GLOWBLOCK", "name": "萤光石", "stackMax": 64, "place": 14, "iconTile": 12 },
+  { "key": "ITEM_CRAFT_TABLE", "name": "工作台", "stackMax": 64, "place": 15, "iconTile": 13 },
+
+  { "key": "ITEM_COAL", "name": "煤炭", "stackMax": 64, "iconTile": 17 },
+  { "key": "ITEM_RAW_IRON", "name": "粗铁", "stackMax": 64, "iconTile": 18 },
+  { "key": "ITEM_RAW_GOLD", "name": "粗金", "stackMax": 64, "iconTile": 19 },
+
+  { "key": "ITEM_APPLE", "name": "苹果", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 22 },
+  { "key": "ITEM_RAW_PORK", "name": "生猪排", "stackMax": 64, "food": { "hunger": 3 } },
+
+  { "key": "ITEM_STICK", "name": "木棍", "stackMax": 64 },
+
+  { "key": "ITEM_WOOD_PICKAXE", "name": "木镐", "stackMax": 1,
+    "tool": { "type": "pickaxe", "tier": 1, "speedMul": 2, "damage": 2 } },
+  { "key": "ITEM_WOOD_AXE", "name": "木斧", "stackMax": 1,
+    "tool": { "type": "axe", "tier": 1, "speedMul": 2, "damage": 3 } },
+  { "key": "ITEM_WOOD_SWORD", "name": "木剑", "stackMax": 1,
+    "tool": { "type": "sword", "tier": 1, "speedMul": 1, "damage": 5 } },
+  { "key": "ITEM_STONE_PICKAXE", "name": "石镐", "stackMax": 1,
+    "tool": { "type": "pickaxe", "tier": 2, "speedMul": 4, "damage": 3 } },
+  { "key": "ITEM_STONE_SWORD", "name": "石剑", "stackMax": 1,
+    "tool": { "type": "sword", "tier": 2, "speedMul": 1, "damage": 7 } }
+]
