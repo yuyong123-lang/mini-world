@@ -1,187 +1,235 @@
-// main.ts —— M1 装配：把体素引擎/渲染器/玩家/交互装成可玩状态。
-// W3 串行集成（任务卡 T31）。流式加载 world.ensureArea 在 W4(T42) 替换本文件的静态生成循环。
+// main.ts —— M2 装配：流式世界 + 资源闭环。
+// 数据链：破坏→掉落物→磁吸拾取→入包→UI 刷新→放置/合成消耗。（任务卡 T51/T52）
 
 import { BLOCK, BlockRegistry } from './blocks/registry';
-import {
-  WORLD_H,
-  localCoord,
-  voxelIndex,
-  worldToChunk,
-} from './core/constants';
-import type { Vec3 } from './core/types';
+import { EventBus, type GameEvents } from './core/events';
+import type { ItemStack } from './core/types';
+import { DropEntity } from './entities/drops';
+import type { EntityCtx } from './entities/entity';
+import { Inventory } from './items/inventory';
+import { ItemRegistry } from './items/items';
+import { CraftingMatcher } from './items/crafting';
+import recipesJson from './data/recipes.json';
+import { World } from './world/world';
 import { Hud } from './ui/hud';
+import { InventoryUI } from './ui/inventoryUI';
+import { CraftUI } from './ui/craftUI';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interact';
 import { Renderer } from './render/renderer';
-import { Chunk } from './world/chunk';
-import { createChunkData, initTerrain, meshNeighborhood } from './world/pipeline-m1';
 
 const SEED = 'mini-world-m1';
 
 function boot(): void {
-  BlockRegistry.load();
+  const bus = new EventBus<GameEvents>();
   const app = document.querySelector<HTMLDivElement>('#app');
   if (!app) throw new Error('#app 容器缺失');
 
-  // ---- 渲染与玩家 ----
+  BlockRegistry.load();
+  CraftingMatcher.load(recipesJson as never); // crafting.ts 不自动加载，boot 时显式喂入
   const renderer = new Renderer(app);
-  const player = new PlayerController({ x: 8.5, y: 50, z: 8.5 });
+
+  // ---- 世界（流式加载中枢，terragen 在其构造器内 init）----
+  const world = new World(SEED);
+  world.onChunkReady = (c, opaque, water) => {
+    renderer.updateChunkGeometry(c, opaque, water);
+    c.meshes = c.meshes ?? null; // renderer 已写回句柄；此处兜底满足卸载协议
+  };
+  world.onChunkUnload = (c) => {
+    renderer.removeChunkMeshes(c);
+  };
+
+  // ---- 背包 / 合成 ----
+  const inv = new Inventory(36);
+  // CraftingMatcher 是静态方法类——包一层实例形状适配 CraftUI 的 duck type
+  const matcherAdapter = {
+    match: ((grid, gridSize) => CraftingMatcher.match(grid, gridSize)) as (
+      grid: (ItemStack | null)[],
+      gridSize: 2 | 3,
+    ) => { out: { key: string; count: number }; consume(grid: (ItemStack | null)[]): (ItemStack | null)[] } | null,
+    consume: (grid: (ItemStack | null)[], recipe: { out: { key: string; count: number }; consume(grid: (ItemStack | null)[]): (ItemStack | null)[] }) =>
+      recipe.consume(grid),
+  };
+  const hud = new Hud(app);
+  const invUI = new InventoryUI(inv, bus, {
+    resolver: (key) => (ItemRegistry.has(key) ? ItemRegistry.get(key).name : key),
+  });
+  const craftUI = new CraftUI(matcherAdapter, inv, { bus });
+  app.appendChild((invUI as unknown as { rootEl?: HTMLElement }).rootEl ?? new DocumentFragment());
+
+  // ---- 玩家与交互 ----
+  const player = new PlayerController({ x: 8.5, y: world.spawnPoint.y + 2, z: 8.5 });
+  player.spawnPoint = { ...world.spawnPoint };
   player.bind(app);
-
-  // ---- 世界（M1 静态版：半径 5 内全部一次性生成 + 网格化）----
-  initTerrain(SEED);
-  const chunks = new Map<string, Chunk>();
-  const genRadius = 5;
-  for (let cx = -genRadius; cx <= genRadius; cx++) {
-    for (let cz = -genRadius; cz <= genRadius; cz++) {
-      const c = new Chunk(cx, cz);
-      c.data.set(createChunkData(cx, cz));
-      chunks.set(`${cx},${cz}`, c);
-    }
-  }
-  // 初始脏标记 → 全部网格化
-  for (const c of chunks.values()) c.dirty = true;
-
-  // 把玩家落到地表
-  spawnPlayerOnGround(player);
-
   const interactor = new Interactor(renderer.camera, player, {
-    getBlock: (x, y, z) => getBlock(x, y, z),
-    isSolid: (x, y, z) => isSolid(x, y, z),
-    setBlock: (x, y, z, id) => setBlock(x, y, z, id),
+    getBlock: (x, y, z) => world.getBlock(x, y, z),
+    isSolid: (x, y, z) => world.isSolid(x, y, z),
   });
   renderer.scene.add(interactor.highlight);
 
-  const hud = new Hud(app);
+  // ---- 掉落物系统 ----
+  const drops: DropEntity[] = [];
+  const entityCtx: EntityCtx = {
+    world,
+    playerPos: player.pos,
+    drops: [], // 运行时由 tick 前动态赋值（见 frame 循环）
+    now: () => performance.now(),
+    tryPickup: (d) => {
+      const stack = d.stack;
+      const remain = inv.add({ ...stack });
+      if (remain === 0) {
+        bus.emit('pickup', { key: stack.key, count: stack.count });
+        return true;
+      }
+      return false;
+    },
+  };
+  entityCtx.drops = drops; // EntityCtx.drops 为 DropLike[]，DropEntity 满足结构
 
-  // 挖掘：直接置 AIR（M1 无掉落物，W4 接 DropEntity）
-  interactor.onBreak((pos) => {
-    setBlock(pos.x, pos.y, pos.z, BLOCK.AIR);
+  /** 破坏方块的掉落表（BlockDef.drop + LEAVES 特例） */
+  function dropTableFor(blockId: number): ItemStack | null {
+    if (blockId === BLOCK.LEAVES) {
+      // 20% 苹果（hash 取模确定性随机——这里用 Math.random 即可，视觉层不要求可复现）
+      return Math.random() < 0.2 ? { key: 'ITEM_APPLE', count: 1 } : null;
+    }
+    const def = BlockRegistry.get(blockId);
+    if (!def.drop) return null;
+    return { key: def.drop, count: 1 };
+  }
+
+  let lastToastPickup = '';
+  bus.on('pickup', ({ key, count }) => {
+    const name = ItemRegistry.has(key) ? ItemRegistry.get(key).name : key;
+    const msg = `+${count} ${name}`;
+    if (msg !== lastToastPickup) hud.showToast(msg);
+    lastToastPickup = msg;
   });
 
-  // 放置：选中热栏方块；目标位必须是 AIR（放自己身体里的保护在 interactor.prev 语义中已保证）
-  let hotbarIndex = 0;
-  const hotbarIds: (number | null)[] = [BLOCK.GRASS, BLOCK.DIRT, BLOCK.STONE, BLOCK.COBBLE, BLOCK.PLANKS, BLOCK.GLASS, null, null, null];
+  bus.on('dropAtPlayer', ({ stack }) => {
+    drops.push(new DropEntity({ ...player.pos, y: player.pos.y + 1 }, stack));
+  });
+
+  // ---- 挖掘 / 放置接线 ----
+  interactor.onBreak((pos, blockId) => {
+    world.setBlock(pos.x, pos.y, pos.z, BLOCK.AIR);
+    bus.emit('blockBroken', { pos, id: blockId });
+    // minTier 过滤：需要工具等级的方块用错误工具挖不掉落（契约 §3）
+    const def = BlockRegistry.get(blockId);
+    const held = inv.heldItem();
+    const heldDef = held ? (ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null) : null;
+    const needTier = def.minTier ?? 0;
+    const haveTier = heldDef?.tool?.tier ?? 0;
+    // JSON 里 tool 可能为 'hand'（徒手可挖），统一字符串比较规避类型差异
+    const needTool = String(def.tool ?? '');
+    const haveTool = heldDef?.tool?.type != null ? String(heldDef.tool.type) : '';
+    const toolOk =
+      needTier === 0 ||
+      needTool === '' ||
+      needTool === 'hand' ||
+      (haveTier >= needTier && haveTool === needTool);
+    if (!toolOk) return; // 方块已破坏但不掉落
+    const table = dropTableFor(blockId);
+    if (table)
+      drops.push(
+        new DropEntity(
+          { x: pos.x + 0.5, y: pos.y + 0.4, z: pos.z + 0.5 },
+          table,
+        ),
+      );
+  });
+
   interactor.onPlace((pos) => {
-    const id = hotbarIds[hotbarIndex];
-    if (id !== null && getBlock(pos.x, pos.y, pos.z) === BLOCK.AIR) {
-      setBlock(pos.x, pos.y, pos.z, id);
-    } else if (id === null) {
-      hud.showToast('空手位——按 1~6 选择方块');
+    const held = inv.heldItem();
+    if (!held) {
+      hud.showToast('手持空位——按 E 打开背包');
+      return;
+    }
+    const itemDef = ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    if (!itemDef?.place) {
+      hud.showToast('当前物品不可放置');
+      return;
+    }
+    if (world.getBlock(pos.x, pos.y, pos.z) !== BLOCK.AIR) return;
+    world.setBlock(pos.x, pos.y, pos.z, itemDef.place);
+    inv.consumeHeld(1);
+    bus.emit('invChanged', {});
+  });
+
+  // 工作台右键 → 打开 3×3 合成
+  interactor.onUseCraftTable(() => {
+    craftUI.open(3);
+  });
+
+  // ---- E 键：背包开合（退出指针锁）----
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyE') return;
+    if (craftUI.isOpen()) {
+      craftUI.close();
+      return;
+    }
+    if (invUI.isOpen()) {
+      invUI.close();
+      void document.exitPointerLock?.();
+      return;
+    }
+    if (document.pointerLockElement) {
+      invUI.open();
+      void document.exitPointerLock?.();
     }
   });
 
   // 数字键切换热栏
   window.addEventListener('keydown', (e) => {
-    if (!document.pointerLockElement) return;
-    const n = Number(e.code.replace('Digit', ''));
-    if (/^Digit[1-9]$/.test(e.code)) {
-      hotbarIndex = n - 1;
-      hud.setHotbarIndex(hotbarIndex);
+    if (!/^Digit[1-9]$/.test(e.code)) return;
+    inv.hotbarIndex = Number(e.code.slice(5)) - 1;
+    bus.emit('invChanged', {});
+  });
+
+  // 关 UI 时若没有面板开着且无指针锁 → 提示点击恢复
+  document.addEventListener('pointerlockchange', () => {
+    if (!document.pointerLockElement && !invUI.isOpen() && !craftUI.isOpen()) {
+      hud.showToast('点击画面继续游戏');
     }
   });
-  hud.setHotbarIndex(0);
-
-  // ---- 体素读写（M1 直接查 chunk 表；越界按契约返回 AIR / 忽略）----
-  function chunkAt(x: number, z: number): Chunk | undefined {
-    return chunks.get(`${worldToChunk(x)},${worldToChunk(z)}`);
-  }
-
-  function getBlock(x: number, y: number, z: number): number {
-    const c = chunkAt(x, z);
-    if (!c || y < 0 || y >= WORLD_H) return 0;
-    return c.data[voxelIndex(localCoord(x), y, localCoord(z))];
-  }
-
-  function isSolid(x: number, y: number, z: number): boolean {
-    const d = BlockRegistry.get(getBlock(x, y, z));
-    return d.solid;
-  }
-
-  function setBlock(x: number, y: number, z: number, id: number): void {
-    const c = chunkAt(x, z);
-    if (!c || y < 0 || y >= WORLD_H) return;
-    c.data[voxelIndex(localCoord(x), y, localCoord(z))] = id;
-    markDirtyAround(x, y, z);
-  }
-
-  /** 本块标脏；贴边时邻块也标脏（跨 chunk 面剔除依赖邻居） */
-  function markDirtyAround(x: number, _y: number, z: number): void {
-    const cx = worldToChunk(x);
-    const cz = worldToChunk(z);
-    dirtify(cx, cz);
-    if (localCoord(x) === 0) dirtify(cx - 1, cz);
-    if (localCoord(x) === 15) dirtify(cx + 1, cz);
-    if (localCoord(z) === 0) dirtify(cx, cz - 1);
-    if (localCoord(z) === 15) dirtify(cx, cz + 1);
-    if (localCoord(x) === 0 && localCoord(z) === 0) dirtify(cx - 1, cz - 1);
-    if (localCoord(x) === 15 && localCoord(z) === 0) dirtify(cx + 1, cz - 1);
-    if (localCoord(x) === 0 && localCoord(z) === 15) dirtify(cx - 1, cz + 1);
-    if (localCoord(x) === 15 && localCoord(z) === 15) dirtify(cx + 1, cz + 1);
-  }
-
-  function dirtify(cx: number, cz: number): void {
-    const c = chunks.get(`${cx},${cz}`);
-    if (c) c.dirty = true;
-  }
 
   // ---- 主循环 ----
   let last = performance.now();
-  let meshBudgetThisFrame = 0;
+  let toastThrottle = '';
 
   function frame(now: number): void {
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
-    player.tick(dt, { isSolid });
-    interactor.update(null, dt, null);
-
-    // 显示准星指向的方块名
-    const t = interactor.currentTarget();
-    hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : '');
-
-    // 脏 chunk 重建网格：每帧最多 2 个（帧预算）
-    meshBudgetThisFrame = 2;
-    for (const c of chunks.values()) {
-      if (meshBudgetThisFrame <= 0) break;
-      if (!c.dirty) continue;
-      remesh(c);
-      meshBudgetThisFrame--;
+    if (invUI.isOpen() || craftUI.isOpen()) {
+      // 面板打开：世界暂停玩家输入但保持渲染
+      hud.setTargetName('');
+      interactor.update(null, dt, null);
+    } else {
+      player.tick(dt, world);
+      interactor.update(inv.heldItem(), dt, null);
+      const t = interactor.currentTarget();
+      hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : '');
     }
 
-    // 相机跟随玩家眼睛
+    world.tick(player.pos);
+    for (const d of drops) d.tick(dt, entityCtx);
+    // 清理死亡掉落物
+    for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
+
+    // 相机跟随
     const eye = player.eyePosition();
     renderer.camera.position.set(eye.x, eye.y, eye.z);
+
+    hud.setHotbarIndex(inv.hotbarIndex);
     renderer.renderFrame(dt);
+
+    const msg = `drops:${drops.length}`;
+    if (msg !== toastThrottle) toastThrottle = msg;
   }
   requestAnimationFrame(frame);
 
-  function remesh(c: Chunk): void {
-    const res = meshNeighborhood(
-      c,
-      (gx, gy, gz) => {
-        const nc = chunkAt(gx, gz);
-        if (!nc) return gy < 0 ? BLOCK.BEDROCK : 0;
-        if (gy < 0 || gy >= WORLD_H) return gy < 0 ? BLOCK.BEDROCK : 0;
-        return nc.data[voxelIndex(localCoord(gx), gy, localCoord(gz))];
-      },
-      c.cx,
-      c.cz,
-    );
-    renderer.updateChunkGeometry(c, res.opaque, res.water);
-    c.dirty = false;
-  }
-
-  // 把玩家从空中落到地面并设为出生点
-  function spawnPlayerOnGround(p: PlayerController): void {
-    let y = WORLD_H - 2;
-    while (y > 1 && !isSolid(Math.floor(p.pos.x), y, Math.floor(p.pos.z))) y--;
-    p.pos.y = y + 1.01;
-    p.spawnPoint = { ...p.pos } as Vec3;
-  }
-
-  console.log(`[mini-world] M1 就绪 seed=${SEED} chunks=${chunks.size}`);
+  console.log(`[mini-world] M2 就绪 seed=${SEED}`);
 }
 
 boot();
