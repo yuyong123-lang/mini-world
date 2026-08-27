@@ -32,6 +32,7 @@ function makeBoxMesh(color: number, w: number, h: number): THREE.Mesh {
   return new THREE.Mesh(geo, mat);
 }
 import { SkySystem } from './render/sky';
+import { ParticleSystem, tileAverageColor } from './render/particles';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
 import {
@@ -123,6 +124,9 @@ function boot(): void {
   });
   renderer.scene.add(interactor.highlight);
 
+  // ---- 挖掘粒子（W10/T102）：破坏事件 → 方块表面色粒子迸溅 ----
+  const particles = new ParticleSystem(renderer);
+
   // ---- 掉落物系统 ----
   const drops: DropEntity[] = [];
   const entityCtx: EntityCtx = {
@@ -165,6 +169,16 @@ function boot(): void {
   interactor.onBreak((pos, blockId) => {
     world.setBlock(pos.x, pos.y, pos.z, BLOCK.AIR);
     bus.emit('blockBroken', { pos, id: blockId });
+    // 粒子：用被破坏方块侧贴图的平均色
+    try {
+      const atlasCanvas = renderer.atlasTexture.image as HTMLCanvasElement;
+      particles.spawnBreak(
+        { x: pos.x + 0.5, y: pos.y + 0.5, z: pos.z + 0.5 },
+        tileAverageColor(atlasCanvas, BlockRegistry.get(blockId).tex[2]),
+      );
+    } catch {
+      /* 图集画布不可用时静默跳过装饰效果 */
+    }
     // minTier 过滤：需要工具等级的方块用错误工具挖不掉落（契约 §3）
     const def = BlockRegistry.get(blockId);
     const held = inv.heldItem();
@@ -402,8 +416,7 @@ function boot(): void {
     syncEntityViews();
     cullFarEntities();
 
-    sky.update(dt);
-
+    particles.update(dt);
     sky.update(dt);
     const eye = player.eyePosition();
     renderer.camera.position.set(eye.x, eye.y, eye.z);
