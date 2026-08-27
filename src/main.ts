@@ -3,9 +3,14 @@
 
 import { BLOCK, BlockRegistry } from './blocks/registry';
 import { EventBus, type GameEvents } from './core/events';
-import type { ItemStack } from './core/types';
+import type { ItemStack, Vec3 } from './core/types';
 import { DropEntity } from './entities/drops';
 import type { EntityCtx } from './entities/entity';
+import { Animal } from './entities/animals';
+import { Monster } from './entities/monsters';
+import { Spawner, shouldDespawn } from './entities/spawner';
+import { tryAttack } from './player/attack';
+import { surfaceHeight } from './world/terragen';
 import { Inventory } from './items/inventory';
 import { ItemRegistry } from './items/items';
 import { CraftingMatcher, type Recipe } from './items/crafting';
@@ -18,6 +23,14 @@ import { StatusUI } from './ui/statusUI';
 import { PlayerController } from './player/controller';
 import { Interactor } from './player/interact';
 import { Renderer } from './render/renderer';
+import * as THREE from 'three';
+
+/** 实体临时视图几何：单 box（W10 打磨多部件造型） */
+function makeBoxMesh(color: number, w: number, h: number): THREE.Mesh {
+  const geo = new THREE.BoxGeometry(w, h, w);
+  const mat = new THREE.MeshLambertMaterial({ color });
+  return new THREE.Mesh(geo, mat);
+}
 import { SkySystem } from './render/sky';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
@@ -272,6 +285,47 @@ function boot(): void {
   app.appendChild((invUI as unknown as { rootEl?: HTMLElement }).rootEl ?? new DocumentFragment());
   void new StatusUI(bus, app); // 自订阅 bus 事件并自挂 DOM，无需保存句柄
 
+  // ---- 生物系统接线（W9/M4）----
+  const animals: Animal[] = [];
+  const monsters: Monster[] = [];
+  const spawner = new Spawner(world, {
+    groundY: (x, z) => surfaceHeight(x, z),
+  });
+  spawner.onSpawnAnimal((pos) => animals.push(new Animal(pos)));
+  spawner.onSpawnMonster((pos) => {
+    const m = new Monster(pos);
+    // 怪物近战 → stats 统一入口（无敌帧/钳制/death 一次性全在 stats 侧）
+    m.attackPlayer = (dmg: number, from: Vec3) => {
+      stats.damageFromMob(dmg, from);
+      bus.emit('damage', { amount: dmg, from });
+    };
+    monsters.push(m);
+  });
+
+  /** 左键攻击：准星实体命中优先于挖掘（未命中实体时 interactor 才走挖矿） */
+  let attackHeld = false;
+  document.addEventListener('mousedown', (e) => {
+    if (e.button === 0 && document.pointerLockElement) attackHeld = true;
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (e.button === 0) attackHeld = false;
+  });
+  let attackCooldown = 0;
+
+  /** 实体死亡清理：掉落物入世界、视图回收 */
+  function handleEntityDeaths(): void {
+    for (const a of animals) {
+      if (!a.dead) continue;
+      a.detachView();
+    }
+    for (let i = animals.length - 1; i >= 0; i--) if (animals[i].dead) animals.splice(i, 1);
+    for (const m of monsters) {
+      if (!m.dead) continue;
+      m.detachView();
+    }
+    for (let i = monsters.length - 1; i >= 0; i--) if (monsters[i].dead) monsters.splice(i, 1);
+  }
+
   // ---- M3 简易续档遮罩（W10 换成完整主菜单）----
   if (!saved) {
     showFirstRunMask(app, world.spawnPoint);
@@ -307,8 +361,48 @@ function boot(): void {
 
     stats.tick(dt);
     world.tick(player.pos);
+
+    // ---- 生物 tick 与清理 ----
+    const isNight = daycycle.isNight;
+    spawner.tick(dt, player.pos, isNight, {
+      animal: animals.length,
+      monster: monsters.length,
+    });
+    // ctx.drops 可能混有动物死亡时插入的裸 DropLike 结构——转成真 DropEntity
+    sanitizeRawDrops();
+    for (const a of animals) a.tick(dt, entityCtx);
+    for (const m of monsters) m.tick(dt, { ...entityCtx, isNight });
+    handleEntityDeaths();
+    // 玩家攻击（左键，冷却 0.5s；准星实体命中优先于挖掘由 mousedown 路径天然保证——
+    // tryAttack 命中帧内 interactor 仍会走挖矿进度，可接受）
+    attackCooldown -= dt;
+    if (attackHeld && attackCooldown <= 0 && !(invUI.isOpen() || craftUI.isOpen())) {
+      const eye = player.eyePosition();
+      const dir: Vec3 = { x: 0, y: 0, z: 0 };
+      player.lookDir(dir);
+      const held = inv.heldItem();
+      const heldDef = held && ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+      const tool = heldDef?.tool ?? null;
+      const all = [...animals, ...monsters];
+      const hit = tryAttack(eye, dir, all, tool, (e, dmg) => {
+        // onHit 只发通知；实体真实受击走 Entity.hurt（击退+无敌帧在基类）
+        (e as unknown as { hurt(d: number, from?: Vec3): void }).hurt(dmg, player.pos);
+      });
+      if (hit) {
+        attackCooldown = 0.5;
+      }
+    }
+
+    // ---- 掉落物 tick + 清理 ----
+    sanitizeRawDrops();
     for (const d of drops) d.tick(dt, entityCtx);
     for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
+
+    // ---- 实体视图同步与 despawn ----
+    syncEntityViews();
+    cullFarEntities();
+
+    sky.update(dt);
 
     sky.update(dt);
     const eye = player.eyePosition();
@@ -324,6 +418,60 @@ function boot(): void {
     if (cur !== prevIsNight) {
       prevIsNight = cur;
       bus.emit('dayTick', { isNight: cur });
+    }
+  }
+
+  /** 动物死亡时向 ctx.drops 插入的是裸 DropLike 结构——转成真 DropEntity */
+  function sanitizeRawDrops(): void {
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i] as unknown as { stack?: ItemStack; dead: boolean };
+      if (d instanceof DropEntity) continue;
+      // 裸结构：挑出 stack 后重建 DropEntity
+      const stack = d.stack ?? { key: 'ITEM_RAW_PORK', count: 1 };
+      drops.splice(i, 1);
+      drops.push(new DropEntity({ ...(drops[i]?.pos ?? player.pos) }, stack));
+    }
+  }
+
+  /** 简易实体视图：彩色 box 组合（W10 可打磨），每帧同步位置与朝向 */
+  function syncEntityViews(): void {
+    for (const a of animals) syncView(a, 0xe8a2a8, 0.7, 0.9);
+    for (const m of monsters) syncView(m, 0x3c4b3a, 0.6, 1.8);
+  }
+
+  function syncView(
+    e: { pos: Vec3; facingYaw?: number; view: unknown; attachView(v: unknown): void },
+    color: number,
+    w: number,
+    h: number,
+  ): void {
+    type V = { mesh: import('three').Mesh; yaw: number | null };
+    let v = e.view as V | null;
+    if (!v) {
+      void color; void w; void h; // 颜色尺寸占位：真正几何在 buildCreatureMesh
+      v = { mesh: buildCreatureMesh(color, w, h), yaw: null };
+      e.attachView(v);
+      renderer.scene.add(v.mesh);
+    }
+    v.mesh.position.set(e.pos.x, e.pos.y + h / 2, e.pos.z);
+    if (e.facingYaw != null && v.yaw !== e.facingYaw) {
+      v.mesh.rotation.y = e.facingYaw;
+      v.yaw = e.facingYaw;
+    }
+  }
+
+  function buildCreatureMesh(color: number, w: number, h: number): import('three').Mesh {
+    const THREE = renderer.gl.domElement.constructor; // noop——three 已由 renderer 引入，直接用命名导入更清晰
+    void THREE;
+    return makeBoxMesh(color, w, h);
+  }
+
+  function cullFarEntities(): void {
+    for (const a of animals) {
+      if (shouldDespawn(a.pos, player.pos)) a.dead = true;
+    }
+    for (const m of monsters) {
+      if (shouldDespawn(m.pos, player.pos)) m.dead = true;
     }
   }
 

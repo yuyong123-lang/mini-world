@@ -70,6 +70,12 @@ const TIME_EPS = 1e-6;
 /** 摔落伤害取整容差（格）。恰好 N 格落差的 v²/(2g) 会算出 N−1e−15，
  *  若不加容差 floor(落差−3) 会少算一格。同样远小于 1 格的量化粒度 */
 const FALL_EPS = 1e-6;
+/** 玩家受击无敌帧时长（ms），与 Entity.hurt 的 500ms 一致 */
+const PLAYER_INVUL_MS = 500;
+/** 怪物近战无敌帧检查用的毫秒时钟 */
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 /** 夹取到 [lo, hi] */
 function clamp(v: number, lo: number, hi: number): number {
@@ -81,6 +87,7 @@ export class StatsSystem {
   private readonly bus: BusLike;
 
   /** 上一帧缓存下来的竖直速度。落地帧据此反推落差，故必须先于使用被赋值 */
+  private playerInvulUntil = 0;
   private prevVelY: number;
   /** 上一帧位置快照（水平位移 → 是否在行走） */
   private lastPos: Vec3;
@@ -187,6 +194,20 @@ export class StatsSystem {
     this.prevVelY = this.player.vel.y;
     this.wasOnGround = this.player.onGround;
     this.lastPos = { x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z };
+  }
+
+  /**
+   * 怪物近战伤害入口（W9 接线：Monster.attackPlayer → 本方法）。
+   * 带 0.5s 受击无敌帧；可打到 0 触发一次性 death。
+   * @param dmg 伤害点数
+   * @param _from 攻击来源位置（当前无击退实现——玩家击退观感差，保留参数备将来）
+   */
+  damageFromMob(dmg: number, _from?: { x: number; y: number; z: number }): void {
+    if (!Number.isFinite(dmg) || dmg <= 0) return;
+    const now = nowMs();
+    if (now < this.playerInvulUntil) return; // 无敌帧
+    this.playerInvulUntil = now + PLAYER_INVUL_MS;
+    this.applyDamage(Math.floor(dmg));
   }
 
   // ── 内部变更路径 ─────────────────────────────────────────────────────────
