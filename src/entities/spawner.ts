@@ -1,0 +1,191 @@
+// entities/spawner.ts —— 出生调度器（T83）
+//
+// 职责边界：本模块只做「候选点采样 + 合法性判定 + 数量上限拦截」，通过回调把
+// 合法出生点交给集成层(main)，绝不直接 new Mob/Animal——实体生命周期与渲染归集成侧。
+//
+// FIXME(依赖): World 目前没有地表高度查询（world.findSpawnY 是构造期 spawn 用途，
+//   会读 chunk 表，语义不同），而 terragen.surfaceHeight 依赖模块级噪声 init 状态，
+//   直接 import 会在未来 worker 化时踩坑。因此地面高度改为构造器注入 groundY(x,z)
+//   （集成侧用 `terrangen.surfaceHeight(x,z)+1` 包装传入即可），属必选项。
+//
+// 坐标约定：groundY 返回「可站立脚底 Y」= 该列最高实心方块 y + 1；
+//   故「支撑地面方块」位于 (x, groundY-1, z)。与 World.findSpawnY(+2 缓冲)、
+//   Entity.pos(脚底中心锚点) 的口径对齐方式见 architecture §2.6。
+//
+// 上限/环带数值出处：architecture §2.6（怪 12 / 动物 20 / >48m despawn）、
+//   任务卡 T83（动物环带 [16,32]、怪物环带 [24,40]、尝试节流 ≥0.5s）。
+
+import { BLOCK } from '../blocks/registry';
+import { SEA_LEVEL } from '../core/constants';
+import type { Vec3 } from '../core/types';
+
+/** 相邻两次出生尝试之间的最小间隔(s)：内部 accumulator 语义 */
+export const SPAWN_ATTEMPT_INTERVAL = 0.5;
+/** 每次尝试内最多考察多少个候选点（舍入后落出环带 / 地面不合格即换点） */
+const CANDIDATES_PER_ATTEMPT = 8;
+/** despawn 缺省距离(m)——architecture §2.6 冻结值 */
+export const DESPAWN_DIST = 48;
+
+const TAU = Math.PI * 2;
+
+/** spawner 需要的最小世界面（src/world/world.ts 的 World 天然满足此签名） */
+export interface SpawnerWorld {
+  getBlock(x: number, y: number, z: number): number;
+  isSolid(x: number, y: number, z: number): boolean;
+}
+
+export interface SpawnOpts {
+  /**
+   * 地面高度查询（必选）：(x,z) 列的「可站立脚底 Y」。
+   * 集成波接线建议：(x, z) => terragen.surfaceHeight(Math.floor(x), Math.floor(z)) + 1。
+   */
+  groundY: (x: number, z: number) => number;
+  /** 动物存活上限（architecture §2.6：20） */
+  animalCap?: number;
+  /** 怪物存活上限（architecture §2.6：12） */
+  monsterCap?: number;
+  /** 供清理循环使用的 despawn 距离(m)；本身不参与出生逻辑（§2.6：48） */
+  despawnDist?: number;
+  /** 动物出生环带（水平距玩家 min~max），默认 [16,32] */
+  animalRing?: [number, number];
+  /** 怪物出生环带，默认 [24,40] */
+  monsterRing?: [number, number];
+  /**
+   * 自定义「地面适合刷动物」谓词；缺省为「支撑方块是 GRASS」（T83 规格）。
+   * 传入后完全接管动物地面过滤（如做雪原生物群系差异），海平面门槛仍然生效。
+   */
+  spawnAnimalOnGround?: (p: Vec3) => boolean;
+  /** 随机源注入（默认 Math.random）；单测传 mulberry32(seed) 保证可复现 */
+  rng?: () => number;
+}
+
+export interface SpawnCounts {
+  animal: number;
+  monster: number;
+}
+
+/**
+ * despawn 判定纯函数（>dist 视为离线，集成侧据此把实体置 dead 并清理）。
+ * 三维欧氏距离；等于阈值不算超界（architecture 口径「>48m」才强制回收）。
+ */
+export function shouldDespawn(pos: Vec3, playerPos: Vec3, dist: number = DESPAWN_DIST): boolean {
+  const dx = pos.x - playerPos.x;
+  const dy = pos.y - playerPos.y;
+  const dz = pos.z - playerPos.z;
+  return dx * dx + dy * dy + dz * dz > dist * dist;
+}
+
+export class Spawner {
+  readonly animalCap: number;
+  readonly monsterCap: number;
+  readonly despawnDist: number;
+
+  private readonly world: SpawnerWorld;
+  private readonly groundY: (x: number, z: number) => number;
+  private readonly animalRing: [number, number];
+  private readonly monsterRing: [number, number];
+  private readonly animalGroundFn: ((p: Vec3) => boolean) | null;
+  private readonly rng: () => number;
+
+  private acc = 0;
+  private animalCbs: Array<(pos: Vec3) => void> = [];
+  private monsterCbs: Array<(pos: Vec3) => void> = [];
+
+  constructor(world: SpawnerWorld, opts: SpawnOpts) {
+    if (!opts || typeof opts.groundY !== 'function') {
+      throw new TypeError('Spawner 必须注入 opts.groundY(x,z)（避免对 terragen 模块级 init 的静态依赖）');
+    }
+    this.world = world;
+    this.groundY = opts.groundY;
+    this.animalCap = opts.animalCap ?? 20;
+    this.monsterCap = opts.monsterCap ?? 12;
+    this.despawnDist = opts.despawnDist ?? DESPAWN_DIST;
+    this.animalRing = opts.animalRing ? [opts.animalRing[0], opts.animalRing[1]] : [16, 32];
+    this.monsterRing = opts.monsterRing ? [opts.monsterRing[0], opts.monsterRing[1]] : [24, 40];
+    this.animalGroundFn = opts.spawnAnimalOnGround ?? null;
+    this.rng = opts.rng ?? Math.random;
+  }
+
+  onSpawnAnimal(cb: (pos: Vec3) => void): void {
+    this.animalCbs.push(cb);
+  }
+
+  onSpawnMonster(cb: (pos: Vec3) => void): void {
+    this.monsterCbs.push(cb);
+  }
+
+  /**
+   * 每帧入口。白天只试动物、夜间只试怪物；出生尝试被节流到每 ≥0.5s 一次
+   * （accumulator 封顶即「落后太多也不补帧」，防止卡顿恢复瞬间集中爆量出生）。
+   */
+  tick(dt: number, playerPos: Vec3, isNight: boolean, counts: SpawnCounts): void {
+    if (!(dt > 0)) return;
+    this.acc = Math.min(this.acc + dt, SPAWN_ATTEMPT_INTERVAL);
+    if (this.acc < SPAWN_ATTEMPT_INTERVAL) return;
+    this.acc = 0;
+
+    if (isNight) this.tryMonsters(playerPos, counts);
+    else this.tryAnimals(playerPos, counts);
+  }
+
+  /** 动物：仅白天；海平面之上的 GRASS 面（或自定义谓词放行） */
+  private tryAnimals(playerPos: Vec3, counts: SpawnCounts): void {
+    if (counts.animal >= this.animalCap) return;
+    for (let i = 0; i < CANDIDATES_PER_ATTEMPT; i++) {
+      const pos = this.sampleInRing(playerPos, this.animalRing);
+      if (!pos) continue;
+      // 地表干燥度：支撑地面方块不低于海平面（terragen 只在 h>=SEA_LEVEL 才长草）
+      if (pos.y - 1 < SEA_LEVEL) continue;
+      const groundOk = this.animalGroundFn
+        ? this.animalGroundFn(pos)
+        : this.world.getBlock(pos.x, pos.y - 1, pos.z) === BLOCK.GRASS;
+      if (!groundOk) continue;
+      // 身位两格（脚 + 头）必须悬空
+      if (this.world.isSolid(pos.x, pos.y, pos.z) || this.world.isSolid(pos.x, pos.y + 1, pos.z)) continue;
+      this.emit(this.animalCbs, pos);
+      return;
+    }
+  }
+
+  /** 怪物：仅夜间；任意干燥可站立方块（不过滤草），脚下 solid、身位两格悬空 */
+  private tryMonsters(playerPos: Vec3, counts: SpawnCounts): void {
+    if (counts.monster >= this.monsterCap) return;
+    for (let i = 0; i < CANDIDATES_PER_ATTEMPT; i++) {
+      const pos = this.sampleInRing(playerPos, this.monsterRing);
+      if (!pos) continue;
+      if (!this.world.isSolid(pos.x, pos.y - 1, pos.z)) continue; // 脚下要有承重
+      if (this.world.isSolid(pos.x, pos.y, pos.z) || this.world.isSolid(pos.x, pos.y + 1, pos.z)) continue;
+      this.emit(this.monsterCbs, pos);
+      return;
+    }
+  }
+
+  /**
+   * 环带采样：随机角度 + [min,max] 随机半径 → 体素列整数化 → 取 groundY。
+   * 整数舍入可能把点推出环带（半径边缘最大偏 ~0.71/轴），为保证「cb 收到的坐标
+   * 与玩家的距离一定落在环带内」（T83 验收：采样合法性），不合格直接返回 null 让
+   * 上层换下一个候选。
+   * 注意环带度量是水平(XZ)距离：地形起伏带来的 y 差不计入（despawn 用三维距离）。
+   */
+  private sampleInRing(playerPos: Vec3, ring: [number, number]): Vec3 | null {
+    const rMin = Math.max(0, ring[0]);
+    const rMax = Math.max(rMin, ring[1]);
+    const ang = this.rng() * TAU;
+    const rad = rMin + this.rng() * (rMax - rMin);
+
+    const cx = Math.floor(playerPos.x + Math.cos(ang) * rad);
+    const cz = Math.floor(playerPos.z + Math.sin(ang) * rad);
+
+    const dx = cx - playerPos.x;
+    const dz = cz - playerPos.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < rMin * rMin || d2 > rMax * rMax) return null;
+
+    return { x: cx, y: this.groundY(cx, cz), z: cz };
+  }
+
+  /** 每个回调发独立克隆，防共享引用被某个监听者原地改坏 */
+  private emit(cbs: Array<(pos: Vec3) => void>, pos: Vec3): void {
+    for (const cb of cbs) cb({ x: pos.x, y: pos.y, z: pos.z });
+  }
+}
