@@ -295,12 +295,21 @@ export class DayCycle {
   skyColors(): { top: string; bottom: string; fog: string; sunAngle: number };
 }
 
-// save/storage.ts
-export function saveGame(w: WorldSaveSource, player: PlayerSnapshot, inv: Inventory): void;
-export function loadGame(): SavedGame | null;
-export function clearSave(): void;
-export function hasSave(): boolean;
-// SavedGame 即架构 §2.9 的 SaveGame 结构（存储层内部 JSON.stringify）
+// save/storage.ts（W6 修订：单 SaveSource 入参 + storage 注入 + startAutosave）
+export interface SaveSource {
+  seed: string;
+  time: number;
+  player: { p: [number, number, number]; yaw: number; pitch: number; hp: number; hunger: number };
+  inventorySlots: (ItemStack | null)[];
+  diffs: Map<string, Map<number, number>>;
+}
+export function saveGame(src: SaveSource, storage?: Storage): boolean;
+export function loadGame(storage?: Storage): SavedGame | null;
+export function clearSave(storage?: Storage): void;
+export function hasSave(storage?: Storage): boolean;
+export function startAutosave(getSrc: () => SaveSource | null, intervalMs?: number, storage?: Storage): () => void;
+// SavedGame 即架构 §2.9 的 SaveGame 结构；storage 缺省 globalThis.localStorage。
+// quota/损坏一律不抛：save 失败返回 false 由接线层弹 toast，load 返回 null。
 
 // core/events.ts
 export class EventBus<T extends Record<string, unknown>> {
