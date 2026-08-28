@@ -195,6 +195,8 @@ function boot(): void {
     isSolid: (x, y, z) => world.isSolid(x, y, z),
   });
   renderer.scene.add(interactor.highlight);
+  renderer.scene.add(interactor.crackOverlay);
+  interactor.setupCrackTexture(renderer.atlasTexture);
 
   // ---- 挖掘粒子（W10/T102）：破坏事件 → 方块表面色粒子迸溅 ----
   const particles = new ParticleSystem(renderer);
@@ -241,13 +243,18 @@ function boot(): void {
   interactor.onBreak((pos, blockId) => {
     world.setBlock(pos.x, pos.y, pos.z, BLOCK.AIR);
     bus.emit('blockBroken', { pos, id: blockId });
-    // 粒子：用被破坏方块侧贴图的平均色
+    // 粒子：破坏瞬间迸溅 22 粒（两倍默认量，观感更爽）；中途挖掘每 0.15s 也冒 3 粒碎屑
     try {
       const atlasCanvas = renderer.atlasTexture.image as HTMLCanvasElement;
+      const color = tileAverageColor(atlasCanvas, BlockRegistry.get(blockId).tex[2]);
       particles.spawnBreak(
         { x: pos.x + 0.5, y: pos.y + 0.5, z: pos.z + 0.5 },
-        tileAverageColor(atlasCanvas, BlockRegistry.get(blockId).tex[2]),
+        color,
+        22,
       );
+      // 记录颜色供挖掘中途碎屑复用（挖掘粒子在 update 循环里按节流发射）
+      miningDebris.color = color;
+      miningDebris.lastPos = { x: pos.x, y: pos.y, z: pos.z };
     } catch {
       /* 图集画布不可用时静默跳过装饰效果 */
     }
@@ -463,6 +470,12 @@ function boot(): void {
   // ---- 主循环 ----
   let last = performance.now();
   let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
+  // 挖掘中途碎屑：节流发射（每 0.15s 3 粒），颜色取自最近破坏的方块
+  const miningDebris = {
+    color: 0x8a7a5a as number,
+    timer: 0,
+    lastPos: { x: 0, y: 0, z: 0 } as Vec3,
+  };
   let diagTick = 0;    // 诊断面板刷新节流
   const probe = { frames: 0, line: '[探针] 等待采样…' };
 
@@ -529,6 +542,19 @@ function boot(): void {
           `vel.z ${preZ.toFixed(2)}→${player.vel.z.toFixed(2)} | keys.size=${player.debugKeyCount()}`;
       }
       guard('interactor', () => interactor.update(inv.heldItem(), dt, null));
+      // 挖掘中途碎屑：准星有目标且正在挖 → 周期性冒 3 粒
+      miningDebris.timer += dt;
+      const miningNow = interactor.breakProgress() > 0.02;
+      const cur = interactor.currentTarget();
+      if (miningNow && cur && miningDebris.timer >= 0.15) {
+        miningDebris.timer = 0;
+        guard('debris', () =>
+          particles.spawnBreak(
+            { x: cur.pos.x + 0.5, y: cur.pos.y + 0.5, z: cur.pos.z + 0.5 },
+            miningDebris.color,
+            3,
+          ));
+      }
       const t = interactor.currentTarget();
       guard('hud', () => hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : ''));
     }

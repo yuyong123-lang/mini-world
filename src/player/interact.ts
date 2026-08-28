@@ -20,8 +20,12 @@ import {
   EdgesGeometry,
   LineBasicMaterial,
   LineSegments,
+  Mesh,
+  MeshBasicMaterial,
+  Texture,
 } from 'three';
 import { REACH } from '../core/constants';
+import { CRACK_TILE_START } from '../blocks/atlas';
 import type { BlockHit, ItemStack, Vec3 } from '../core/types';
 import { BLOCK, BlockRegistry } from '../blocks/registry';
 import type { BlockDef } from '../blocks/registry';
@@ -190,6 +194,14 @@ const HIGHLIGHT_SIZE = 1.001;
 export class Interactor {
   /** 黑色半透线框；由 main 负责挂入渲染场景（本类无 scene 句柄） */
   readonly highlight: LineSegments;
+  /**
+   * 挖掘裂纹覆盖盒：六面贴同一张裂纹帧（图集 tile 34..43 十帧）。
+   * material.map 随挖掘进度切换帧；由 main 挂入渲染场景（构造时未挂，update 后 main 需 add）。
+   */
+  readonly crackOverlay: Mesh;
+  /** 裂纹贴图（外部注入图集 canvas 后调用 setupCrackTexture 创建） */
+  private crackTexture: Texture | null = null;
+  private crackMat: MeshBasicMaterial;
   /** 当前准星命中；丢失目标时为 null（对象每次 update 重建，勿跨帧缓存） */
   private target: BlockHit | null = null;
   private targetKey: string | null = null;
@@ -214,7 +226,39 @@ export class Interactor {
     this.highlight.visible = false;
     this.highlight.frustumCulled = false;
     this.highlight.name = 'blockHighlight';
+
+    // 裂纹覆盖盒：略大于方块防 z-fighting；贴图帧由 applyVisuals 按进度切换
+    this.crackMat = new MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    this.crackOverlay = new Mesh(
+      new BoxGeometry(HIGHLIGHT_SIZE + 0.002, HIGHLIGHT_SIZE + 0.002, HIGHLIGHT_SIZE + 0.002),
+      this.crackMat,
+    );
+    this.crackOverlay.visible = false;
+    this.crackOverlay.frustumCulled = false;
+    this.crackOverlay.name = 'crackOverlay';
+
     this.bindEvents();
+  }
+
+  /**
+   * 注入图集纹理并配置裂纹 UV（十帧共用一张图集，切帧 = 改 offset/repeat）。
+   * 由 main 在拿到 atlasTexture 后调用；不调用则裂纹层不显示（降级为仅线框加深）。
+   */
+  setupCrackTexture(atlasTexture: Texture): void {
+    // 克隆一份专用纹理实例：offset/repeat 是纹理级状态，与地形材质共用会互相干扰
+    const t = atlasTexture.clone();
+    t.needsUpdate = true;
+    // tile 16px / 图集 256px → 单帧占 1/16；起点 tile 34 → col 2, row 2
+    const frame = 1 / 16;
+    t.repeat.set(frame, frame);
+    this.crackTexture = t;
+    this.crackMat.map = t;
   }
 
   /** 每帧入口：重做射线、刷新高亮与挖掘进度。targetEl 传 null 时跳过 HUD 写入 */
@@ -346,13 +390,31 @@ export class Interactor {
     if (t) this.highlight.position.set(t.pos.x + 0.5, t.pos.y + 0.5, t.pos.z + 0.5);
   }
 
-  /** 挖掘裂纹视觉（M2 简化）：不挖掘回到 0.6，挖掘时随进度 0.25→0.9 加深；并同步 HUD 进度变量 */
+  /** 裂纹覆盖盒同步：位置跟目标，帧号跟进度 */
+  private syncCrackOverlay(mining: boolean): void {
+    const t = this.target;
+    const show = mining && t !== null && this.crackTexture !== null && this.progress > 0.02;
+    this.crackOverlay.visible = show;
+    if (!show || !t) return;
+    this.crackOverlay.position.set(t.pos.x + 0.5, t.pos.y + 0.5, t.pos.z + 0.5);
+    // 十帧裂纹：progress 0..1 → 帧 0..9；tile 34 → col=2,row=2，向右下排布
+    const frameIdx = Math.min(9, Math.floor(this.breakProgress() * 10));
+    const col = (CRACK_TILE_START + frameIdx) % 16;
+    const row = Math.floor((CRACK_TILE_START + frameIdx) / 16);
+    if (this.crackTexture) {
+      // canvas 纹理 v 轴翻转（tileUV 同款约定）：flipY 下 offset.y 从图集底部起算
+      this.crackTexture.offset.set(col / 16, 1 - (row + 1) / 16);
+    }
+  }
+
+  /** 挖掘裂纹视觉：不挖掘回到 0.6，挖掘时随进度 0.25→0.9 加深；并同步 HUD 进度变量 */
   private applyVisuals(targetEl: HTMLElement | null, mining: boolean): void {
     const mat = this.highlight.material as LineBasicMaterial;
     mat.opacity = mining
       ? OPACITY_MINING_FROM +
         (OPACITY_MINING_TO - OPACITY_MINING_FROM) * this.breakProgress()
       : OPACITY_IDLE;
+    this.syncCrackOverlay(mining);
     if (targetEl) {
       targetEl.style.setProperty('--mine-progress', this.breakProgress().toFixed(3));
     }
