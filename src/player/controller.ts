@@ -14,6 +14,16 @@ import type { PhysicsBody } from '../physics/collide';
 const MOUSE_SENS_DEFAULT = 0.0022;
 /** pitch 夹持极限：±89° ≈ ±1.5533 rad（防止过顶翻转出现万向锁） */
 const PITCH_LIMIT = 1.5533;
+/** 水中移速倍率（黏滞感） */
+const SWIM_SPEED_MUL = 0.55;
+/** 水中重力倍率（近似浮力：下沉慢） */
+const SWIM_GRAVITY_MUL = 0.35;
+/** 水中垂直阻尼（每秒保留比例）——限制沉速/上浮速度 */
+const SWIM_DRAG_PER_SEC = 0.12;
+/** 按住空格的水中上浮加速度 */
+const SWIM_UP_ACCEL = 16;
+/** 玩家是否处于水中（供摔落伤豁免/视图特效查询） */
+// 字段声明在类内（见 inWater）
 /** 眼高（格）。注意：契约 constants.ts 没有 EYE_HEIGHT，故就地定义；
  *  pos 锚点是「脚底中心」，所以眼睛 = pos + 1.62 */
 const EYE_HEIGHT = 1.62;
@@ -148,6 +158,9 @@ export class PlayerController implements PhysicsBody {
   }
   private sensitivity: number | null = null;
 
+  /** 是否处于水中（每帧 tick 更新）；摔落伤豁免与水下视觉可查询 */
+  inWater = false;
+
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!PlayerController.TRACKED_CODES.has(e.code)) return;
     if (e.code === 'Space') e.preventDefault(); // 空格默认会滚动页面
@@ -162,8 +175,17 @@ export class PlayerController implements PhysicsBody {
     this.keys.clear();
   };
 
-  /** 单帧推进：输入合成 → 目标水平速度平滑 → 重力/跳跃 → 分轴碰撞移动 */
-  tick(dt: number, world: { isSolid(x: number, y: number, z: number): boolean }): void {
+  /**
+   * 单帧推进：输入合成 → 目标水平速度平滑 → 重力/跳跃 → 分轴碰撞移动。
+   * world 兼容收窄的 { isSolid } 或扩展的 { isSolid, isLiquid }——传后者时启用游泳物理。
+   */
+  tick(
+    dt: number,
+    world: {
+      isSolid(x: number, y: number, z: number): boolean;
+      isLiquid?(x: number, y: number, z: number): boolean;
+    },
+  ): void {
     if (!Number.isFinite(dt)) return;
     const step = Math.max(0, dt);
 
@@ -179,13 +201,43 @@ export class PlayerController implements PhysicsBody {
     // 届时改成 this.sprinting = shift && f>0 && this.hunger>0 并在耗尽时打断冲刺
     this.sprinting = this.keys.has('ShiftLeft') && f > 0;
 
+    // ---- 水检测（脚部或身体中心任一在液体中即视为"在水中"） ----
+    const inWater = world.isLiquid
+      ? world.isLiquid(
+          Math.floor(this.pos.x),
+          Math.floor(this.pos.y + 0.3),
+          Math.floor(this.pos.z),
+        ) ||
+        world.isLiquid(
+          Math.floor(this.pos.x),
+          Math.floor(this.pos.y + this.height * 0.6),
+          Math.floor(this.pos.z),
+        )
+      : false;
+    this.inWater = inWater;
+
     const dir = computeMoveDir(this.yaw, keysState);
-    const speed = computeSpeed(this.sprinting);
-    const k = Math.min(1, step * HORIZ_ACCEL_PER_SEC); // 帧率无关的平滑系数
+    const speed = computeSpeed(this.sprinting) * (inWater ? SWIM_SPEED_MUL : 1);
+    const accel = inWater ? HORIZ_ACCEL_PER_SEC * 0.6 : HORIZ_ACCEL_PER_SEC;
+    const k = Math.min(1, step * accel); // 帧率无关的平滑系数；水中更黏滞
     this.vel.x += (dir.x * speed - this.vel.x) * k;
     this.vel.z += (dir.z * speed - this.vel.z) * k;
 
-    this.vel.y += GRAVITY * step;
+    if (inWater) {
+      // ---- 游泳物理：低重力 + 垂直阻尼 + 空格上浮 ----
+      this.vel.y += GRAVITY * SWIM_GRAVITY_MUL * step;
+      this.vel.y *= Math.pow(SWIM_DRAG_PER_SEC, step); // 指数阻尼，帧率无关
+      if (this.keys.has('Space')) this.vel.y += SWIM_UP_ACCEL * step;
+      // 出水瞬间的助推：贴水面游动能跳上河岸
+      if (this.onGround === false && this.vel.y > 0) {
+        const headY = this.pos.y + this.height;
+        if (world.isSolid(Math.floor(this.pos.x), Math.floor(headY), Math.floor(this.pos.z))) {
+          // 头顶仍被挡 → 保持水中物理即可，无需额外处理
+        }
+      }
+    } else {
+      this.vel.y += GRAVITY * step;
+    }
 
     // 必须在 moveWithCollisions 之前判定：后者会把 onGround 重置为本帧结论
     if (this.keys.has('Space') && this.onGround) {

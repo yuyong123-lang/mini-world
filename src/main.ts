@@ -108,11 +108,29 @@ function boot(): void {
   const sky = new SkySystem(renderer, daycycle);
   // 玩家位置：存档优先
   const p0 = saved?.player.p;
-  const player = new PlayerController({
+  // 读档位置合法性校验：卡在液体/固体里（如存档时泡在水下）→ 回出生点重新落地
+  let spawnPos = {
     x: p0 ? p0[0] : world.spawnPoint.x + 0.5,
     y: p0 ? p0[1] : world.spawnPoint.y + 2,
     z: p0 ? p0[2] : world.spawnPoint.z + 0.5,
-  });
+  };
+  if (p0) {
+    const fx = Math.floor(spawnPos.x);
+    const fz = Math.floor(spawnPos.z);
+    const bodyInBad =
+      world.isLiquid(fx, Math.floor(spawnPos.y + 0.5), fz) ||
+      world.isSolid(fx, Math.floor(spawnPos.y + 0.5), fz) ||
+      world.isSolid(fx, Math.floor(spawnPos.y + 1.5), fz);
+    if (bodyInBad) {
+      console.warn('[mini-world] 存档位置不可用（水中/卡方块），回到出生点');
+      spawnPos = {
+        x: world.spawnPoint.x + 0.5,
+        y: world.spawnPoint.y + 2,
+        z: world.spawnPoint.z + 0.5,
+      };
+    }
+  }
+  const player = new PlayerController(spawnPos);
   player.yaw = saved?.player.yaw ?? 0;
   player.pitch = saved?.player.pitch ?? 0;
   player.hp = saved?.player.hp ?? 20;

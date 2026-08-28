@@ -249,6 +249,11 @@ export class World {
     return BlockRegistry.get(this.getBlock(x, y, z)).solid;
   }
 
+  /** 该坐标是否为液体（水）。未加载区域返回 false（与 getBlock→AIR 一致） */
+  isLiquid(x: number, y: number, z: number): boolean {
+    return BlockRegistry.get(this.getBlock(x, y, z)).liquid === true;
+  }
+
   /** DDA 射线委托 player/interact.ddaRaycast（禁止另写一份步进逻辑） */
   raycast(origin: Vec3, dir: Vec3, maxDist: number): BlockHit {
     return ddaRaycast((x, y, z) => this.getBlock(x, y, z), origin, dir, maxDist);
