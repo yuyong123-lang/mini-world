@@ -509,6 +509,13 @@ function boot(): void {
 
     if (invUI.isOpen() || craftUI.isOpen()) {
       guard('interactor', () => interactor.update(null, dt, null));
+      // 防面板幽灵卡死：指针已重新锁定却仍有面板"开着"（状态与显示不一致的病态态）
+      // ——此时玩家永久无法移动且看不到面板，症状正是"键按下但人不动"。
+      // 检测到即强制关闭恢复游戏。
+      if (document.pointerLockElement) {
+        if (invUI.isOpen()) invUI.close();
+        if (craftUI.isOpen()) craftUI.close();
+      }
     } else {
       guard('player', () => player.tick(dt, world));
       guard('interactor', () => interactor.update(inv.heldItem(), dt, null));
@@ -647,12 +654,17 @@ function boot(): void {
       const p = player.pos;
       const v = player.vel;
       const nan = (x: number) => (Number.isFinite(x) ? x.toFixed(1) : 'NaN!');
+      const panel = craftUI.isOpen() ? `合成(${craftUI.mode()})` : invUI.isOpen() ? '背包' : '无';
+      const footChunk = world.chunks.get(
+        `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`,
+      );
+      const footLoaded = footChunk ? '有' : '无';
       diag.textContent =
         `fps≈${Math.round(1 / Math.max(dt, 1e-3))} | 锁定:${document.pointerLockElement ? '是' : '否'} ` +
-        `| 键:${player.debugKeys()} | 模式:${player.viewMode}\n` +
+        `| 键:${player.debugKeys()} | 面板:${panel} | 模式:${player.viewMode}\n` +
         `pos(${nan(p.x)},${nan(p.y)},${nan(p.z)}) vel(${nan(v.x)},${nan(v.y)},${nan(v.z)}) ` +
         `| 水中:${player.inWater ? '是' : '否'} hp:${player.hp.toFixed(0)} 饥饿:${player.hunger.toFixed(1)}\n` +
-        `区块:${world.chunks.size} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
+        `区块:${world.chunks.size} 脚下:${footLoaded} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
     }
   }
   requestAnimationFrame(frame);
