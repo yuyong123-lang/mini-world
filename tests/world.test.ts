@@ -126,7 +126,8 @@ describe('卸载', () => {
     expect(sink.unloaded[0].meshes).toBe(null); // dispose 已归还句柄
   });
 
-  it('卸载后重进该区域：chunk 重新生成且玩家 diff 被回放', () => {
+  // 600 帧世界模拟叠加 GC 压力，5s 默认预算在全文件连续跑时不够（隔离跑 ~2s）
+  it('卸载后重进该区域：chunk 重新生成且玩家 diff 被回放', { timeout: 20000 }, () => {
     runFrames(world, { x: 8, y: 40, z: 8 }, 140);
     // 在出生柱顶放一个方块再卸载走人
     const topY = world.findSpawnY(8, 8) + 5;

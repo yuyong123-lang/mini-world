@@ -294,7 +294,8 @@ describe('World({workersOff:true}) 功能等价', () => {
     expect(readyKeys.length).toBe(total); // 脏队列排空后不再重复重建
   });
 
-  it('卸载后重进区域：chunk 再生且 diffs 回放', () => {
+  // 同 world.test.ts：600 帧模拟在连续执行时需要超出 5s 默认预算
+  it('卸载后重进区域：chunk 再生且 diffs 回放', { timeout: 20000 }, () => {
     for (let f = 0; f < 140; f++) world.tick({ x: 8, y: 40, z: 8 });
     const topY = world.findSpawnY(8, 8) + 5;
     world.setBlock(8, topY, 8, BLOCK.GLOWBLOCK);

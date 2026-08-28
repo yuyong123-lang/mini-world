@@ -1,23 +1,10 @@
 // ui/hud.ts —— HUD DOM overlay：准星/热栏/toast（契约 §13）
-// M1 限定：热栏为「无限方块模式」预置 6 种方块，W4 换真实 Inventory 驱动。
+// 热栏由真实 Inventory 驱动（W11 修正：M1 的写死预设已废弃）。
 
-import { BLOCK } from '../blocks/registry';
+import { ItemRegistry } from '../items/items';
+import type { Inventory } from '../items/inventory';
 
-export interface HotbarEntry {
-  /** 展示名 */
-  name: string;
-  /** 可放置的方块 id；null 表示空手位 */
-  blockId: number | null;
-}
-
-const PRESET: HotbarEntry[] = [
-  { name: '草方块', blockId: BLOCK.GRASS },
-  { name: '泥土', blockId: BLOCK.DIRT },
-  { name: '石头', blockId: BLOCK.STONE },
-  { name: '圆石', blockId: BLOCK.COBBLE },
-  { name: '木板', blockId: BLOCK.PLANKS },
-  { name: '玻璃', blockId: BLOCK.GLASS },
-];
+const SLOT_EMPTY_LABEL = '';
 
 export class Hud {
   private root: HTMLElement;
@@ -25,7 +12,10 @@ export class Hud {
   private toastEl: HTMLElement;
   private toastTimer: number | undefined;
 
-  constructor(parent: HTMLElement) {
+  constructor(
+    parent: HTMLElement,
+    private inv?: Inventory,
+  ) {
     this.root = document.createElement('div');
     this.root.id = 'hud';
 
@@ -34,17 +24,13 @@ export class Hud {
     crosshair.id = 'crosshair';
     this.root.appendChild(crosshair);
 
-    // 热栏（9 格，M1 预置 6 种 + 3 空手位）
+    // 热栏（9 格横排；内容由 renderHotbar 用真实背包驱动）
     const bar = document.createElement('div');
+    bar.className = 'bar';
     for (let i = 0; i < 9; i++) {
       const slot = document.createElement('div');
       slot.className = 'hud-slot';
       slot.dataset.index = String(i);
-      const entry = PRESET[i] ?? { name: '', blockId: null };
-      if (entry.blockId !== null) {
-        slot.textContent = entry.name.slice(0, 2);
-        slot.title = entry.name;
-      }
       bar.appendChild(slot);
       this.slots.push(slot);
     }
@@ -57,6 +43,31 @@ export class Hud {
 
     injectStyle();
     parent.appendChild(this.root);
+  }
+
+  /** 用背包 0..8 槽刷新热栏内容（名称缩写 + 数量角标） */
+  renderHotbar(): void {
+    if (!this.inv) return;
+    this.slots.forEach((slot, i) => {
+      const s = this.inv!.slots[i];
+      if (!s) {
+        slot.textContent = SLOT_EMPTY_LABEL;
+        slot.title = '';
+        const old = slot.querySelector('.cnt');
+        if (old) old.remove();
+        return;
+      }
+      const name = ItemRegistry.has(s.key) ? ItemRegistry.get(s.key).name : s.key;
+      slot.textContent = name.slice(0, 2);
+      slot.title = `${name} ×${s.count}`;
+      let cnt = slot.querySelector<HTMLElement>('.cnt');
+      if (!cnt) {
+        cnt = document.createElement('span');
+        cnt.className = 'cnt';
+        slot.appendChild(cnt);
+      }
+      cnt.textContent = String(s.count);
+    });
   }
 
   /** 当前选中槽位高亮刷新 */
@@ -99,7 +110,9 @@ function injectStyle(): void {
 .hud-slot{width:44px;height:44px;border:2px solid rgba(255,255,255,.5);background:rgba(20,24,32,.55);
   display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;text-shadow:0 1px 2px #000;
   border-radius:4px;box-sizing:border-box}
+.hud-slot{position:relative}
 .hud-slot.active{border-color:#ffd75e;box-shadow:0 0 8px rgba(255,215,94,.7)}
+.hud-slot .cnt{position:absolute;right:3px;bottom:1px;font-size:11px;color:#fff;text-shadow:0 1px 2px #000}
 #toast{position:absolute;left:50%;bottom:74px;transform:translateX(-50%);background:rgba(15,18,26,.78);
   color:#fff;padding:6px 14px;border-radius:6px;font-size:14px;opacity:0;transition:opacity .25s}
 #toast.show{opacity:1}

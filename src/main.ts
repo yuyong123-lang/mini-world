@@ -3,6 +3,7 @@
 
 import { BLOCK, BlockRegistry } from './blocks/registry';
 import { EventBus, type GameEvents } from './core/events';
+import { DAY_LENGTH } from './core/constants';
 import type { ItemStack, Vec3 } from './core/types';
 import { DropEntity } from './entities/drops';
 import type { EntityCtx } from './entities/entity';
@@ -94,7 +95,7 @@ function boot(): void {
       } | null,
     consume: (grid: (ItemStack | null)[], recipe: Recipe) => CraftingMatcher.consume(grid, recipe),
   };
-  const hud = new Hud(app);
+  const hud = new Hud(app, inv);
   const invUI = new InventoryUI(inv, bus, {
     resolver: (key) => (ItemRegistry.has(key) ? ItemRegistry.get(key).name : key),
   });
@@ -102,7 +103,8 @@ function boot(): void {
   app.appendChild((invUI as unknown as { rootEl?: HTMLElement }).rootEl ?? new DocumentFragment());
 
   // ---- 昼夜与生存 ----
-  const daycycle = new DayCycle(saved?.time ?? 0);
+  // 新世界从正午开始（t=0 是黎明地平线，光照近 0 会一进游戏就摸黑）；读档沿用存档时刻
+  const daycycle = new DayCycle(saved?.time ?? DAY_LENGTH * 0.5);
   const sky = new SkySystem(renderer, daycycle);
   // 玩家位置：存档优先
   const p0 = saved?.player.p;
@@ -447,6 +449,7 @@ function boot(): void {
     const eye = player.eyePosition();
     renderer.camera.position.set(eye.x, eye.y, eye.z);
     hud.setHotbarIndex(inv.hotbarIndex);
+    hud.renderHotbar();
     renderer.renderFrame(dt);
   }
   requestAnimationFrame(frame);
