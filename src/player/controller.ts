@@ -193,6 +193,11 @@ export class PlayerController implements PhysicsBody {
   /** 是否处于水中（每帧 tick 更新）；摔落伤豁免与水下视觉可查询 */
   inWater = false;
 
+  /** 诊断用：当前按住的键位列表（诊断 HUD 显示用） */
+  debugKeys(): string {
+    return this.keys.size === 0 ? '无' : [...this.keys].map((k) => k.replace('Key', '').replace('ShiftLeft', 'Shift')).join('+');
+  }
+
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!PlayerController.TRACKED_CODES.has(e.code)) return;
     if (e.code === 'Space') e.preventDefault(); // 空格默认会滚动页面
@@ -220,6 +225,18 @@ export class PlayerController implements PhysicsBody {
   ): void {
     if (!Number.isFinite(dt)) return;
     const step = Math.max(0, dt);
+
+    // NaN 守卫：位置一旦被污染（异常数值传播），整个物理就永久静默失效——
+    // 这正是"控制台无报错但角色不动"的可疑死因之一。检测到即重置到出生点。
+    if (!Number.isFinite(this.pos.x + this.pos.y + this.pos.z)) {
+      console.warn('[player] 位置 NaN，重置到出生点');
+      this.pos.x = this.spawnPoint.x;
+      this.pos.y = this.spawnPoint.y;
+      this.pos.z = this.spawnPoint.z;
+      this.vel.x = 0;
+      this.vel.y = 0;
+      this.vel.z = 0;
+    }
 
     const keysState: MoveKeysState = {
       w: this.keys.has('KeyW'),

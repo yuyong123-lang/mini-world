@@ -463,6 +463,20 @@ function boot(): void {
   // ---- 主循环 ----
   let last = performance.now();
   let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
+  let diagTick = 0;    // 诊断面板刷新节流
+
+  // ---- 屏幕诊断 HUD（左上角小字）：主循环活着 + 玩家内部状态一目了然 ----
+  const diag = document.createElement('div');
+  diag.id = 'diag';
+  document.body.appendChild(diag);
+  {
+    const style = document.createElement('style');
+    style.textContent = `
+#diag{position:fixed;left:8px;top:8px;z-index:9000;color:#7fff9f;font:11px/1.5 monospace;
+  background:rgba(0,0,0,.45);padding:4px 8px;border-radius:4px;pointer-events:none;white-space:pre}`;
+    style.id = 'diag-style';
+    document.head.appendChild(style);
+  }
 
   /** 包一层系统 tick：抛错时显示到屏幕（错误浮层）并跳过本帧该系统，主循环不断 */
   function guard<T>(name: string, fn: () => T): T | undefined {
@@ -627,6 +641,19 @@ function boot(): void {
     hud.setHotbarIndex(inv.hotbarIndex);
     hud.renderHotbar();
     renderer.renderFrame(dt);
+
+    // ---- 诊断行（每 15 帧刷新，≈4Hz）----
+    if ((diagTick = (diagTick + 1) % 15) === 0) {
+      const p = player.pos;
+      const v = player.vel;
+      const nan = (x: number) => (Number.isFinite(x) ? x.toFixed(1) : 'NaN!');
+      diag.textContent =
+        `fps≈${Math.round(1 / Math.max(dt, 1e-3))} | 锁定:${document.pointerLockElement ? '是' : '否'} ` +
+        `| 键:${player.debugKeys()} | 模式:${player.viewMode}\n` +
+        `pos(${nan(p.x)},${nan(p.y)},${nan(p.z)}) vel(${nan(v.x)},${nan(v.y)},${nan(v.z)}) ` +
+        `| 水中:${player.inWater ? '是' : '否'} hp:${player.hp.toFixed(0)} 饥饿:${player.hunger.toFixed(1)}\n` +
+        `区块:${world.chunks.size} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
+    }
   }
   requestAnimationFrame(frame);
 
