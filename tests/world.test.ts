@@ -112,7 +112,8 @@ describe('ensureArea 流式加载', () => {
 });
 
 describe('卸载', () => {
-  it('玩家移动到远处反复 tick 后原 chunk 触发 onChunkUnload 并移出表', () => {
+  // 390 帧模拟在连续执行+机器负载波动下可能超 5s（隔离跑 ~2s），放宽到 30s
+  it('玩家移动到远处反复 tick 后原 chunk 触发 onChunkUnload 并移出表', { timeout: 30000 }, () => {
     runFrames(world, { x: 8, y: 40, z: 8 }, 140);
     expect(world.chunks.has('0,0')).toBe(true);
 

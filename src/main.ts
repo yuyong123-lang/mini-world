@@ -49,6 +49,37 @@ import {
 
 const SEED = 'mini-world-m1';
 
+/**
+ * 全局错误显示：任何运行时异常直接打到屏幕上（而非只在 console）。
+ * 背景：rAF 主循环里的异常每帧重抛但画面静默冻结，玩家侧只看到"不能动"，
+ * 却无从得知原因——必须让它可见。
+ */
+function installErrorOverlay(): void {
+  const show = (title: string, detail: string): void => {
+    let el = document.getElementById('error-overlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'error-overlay';
+      document.body.appendChild(el);
+      const style = document.createElement('style');
+      style.textContent = `
+#error-overlay{position:fixed;left:12px;top:12px;right:12px;z-index:9999;
+  background:rgba(120,10,10,.92);color:#fff;padding:10px 14px;border-radius:8px;
+  font:12px/1.5 monospace;white-space:pre-wrap;max-height:40vh;overflow:auto;
+  border:1px solid rgba(255,120,120,.6);pointer-events:auto}`;
+      style.id = 'error-overlay-style';
+      document.head.appendChild(style);
+    }
+    el.textContent = `${title}\n\n${detail}`;
+  };
+  window.addEventListener('error', (e) => {
+    show('⚠ 运行时错误（游戏已暂停响应）', `${e.message}\n${e.filename}:${e.lineno}:${e.colno}\n\n${e.error?.stack ?? ''}`);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    show('⚠ 未处理的 Promise 异常', String(e.reason));
+  });
+}
+
 function boot(): void {
   const bus = new EventBus<GameEvents>();
   const app = document.querySelector<HTMLDivElement>('#app');
@@ -433,26 +464,46 @@ function boot(): void {
   let last = performance.now();
   let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
 
+  /** 包一层系统 tick：抛错时显示到屏幕（错误浮层）并跳过本帧该系统，主循环不断 */
+  function guard<T>(name: string, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (err) {
+      showFrameError(name, err);
+      return undefined;
+    }
+  }
+
+  let firstErrorShown = false;
+  function showFrameError(system: string, err: unknown): void {
+    const msg = `[${system}] ${err instanceof Error ? err.stack ?? err.message : String(err)}`;
+    console.error(msg);
+    if (firstErrorShown) return; // 每帧重抛会刷屏——只显示一次，后续仅 console
+    firstErrorShown = true;
+    const el = document.getElementById('error-overlay');
+    if (el) el.textContent = `⚠ 主循环异常（游戏可能表现异常）\n\n${msg}`;
+  }
+
   function frame(now: number): void {
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
-    daycycle.tick(dt);
+    guard('daycycle', () => daycycle.tick(dt));
     // 夜幕翻变沿 → dayTick 事件
     emitDayEdge();
 
     if (invUI.isOpen() || craftUI.isOpen()) {
-      interactor.update(null, dt, null);
+      guard('interactor', () => interactor.update(null, dt, null));
     } else {
-      player.tick(dt, world);
-      interactor.update(inv.heldItem(), dt, null);
+      guard('player', () => player.tick(dt, world));
+      guard('interactor', () => interactor.update(inv.heldItem(), dt, null));
       const t = interactor.currentTarget();
-      hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : '');
+      guard('hud', () => hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : ''));
     }
 
-    stats.tick(dt);
-    world.tick(player.pos);
+    guard('stats', () => stats.tick(dt));
+    guard('world', () => world.tick(player.pos));
 
     // ---- 卡方块自救（每帧检查）：身体嵌在固体里且持续无法移动时，
     //      抬升到该柱最高实心面之上。覆盖「读档位置被方块埋住」「放置事故」等情形。
@@ -489,14 +540,19 @@ function boot(): void {
 
     // ---- 生物 tick 与清理 ----
     const isNight = daycycle.isNight;
-    spawner.tick(dt, player.pos, isNight, {
-      animal: animals.length,
-      monster: monsters.length,
-    });
+    guard('spawner', () =>
+      spawner.tick(dt, player.pos, isNight, {
+        animal: animals.length,
+        monster: monsters.length,
+      }));
     // ctx.drops 可能混有动物死亡时插入的裸 DropLike 结构——转成真 DropEntity
-    sanitizeRawDrops();
-    for (const a of animals) a.tick(dt, entityCtx);
-    for (const m of monsters) m.tick(dt, { ...entityCtx, isNight });
+    guard('drops-sanitize', () => sanitizeRawDrops());
+    guard('animals', () => {
+      for (const a of animals) a.tick(dt, entityCtx);
+    });
+    guard('monsters', () => {
+      for (const m of monsters) m.tick(dt, { ...entityCtx, isNight });
+    });
     handleEntityDeaths();
     // 玩家攻击（左键，冷却 0.5s；准星实体命中优先于挖掘由 mousedown 路径天然保证——
     // tryAttack 命中帧内 interactor 仍会走挖矿进度，可接受）
@@ -519,16 +575,17 @@ function boot(): void {
     }
 
     // ---- 掉落物 tick + 清理 ----
-    sanitizeRawDrops();
-    for (const d of drops) d.tick(dt, entityCtx);
+    guard('drops-tick', () => {
+      for (const d of drops) d.tick(dt, entityCtx);
+    });
     for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
 
     // ---- 实体视图同步与 despawn ----
-    syncEntityViews();
-    cullFarEntities();
+    guard('entity-views', () => syncEntityViews());
+    guard('cull', () => cullFarEntities());
 
-    particles.update(dt);
-    sky.update(dt);
+    guard('particles', () => particles.update(dt));
+    guard('sky', () => sky.update(dt));
     // ---- 相机（第一/第三人称）----
     const eye = player.eyePosition();
     const camPos = player.cameraPosition({ x: 0, y: 0, z: 0 });
@@ -585,12 +642,13 @@ function boot(): void {
   /** 动物死亡时向 ctx.drops 插入的是裸 DropLike 结构——转成真 DropEntity */
   function sanitizeRawDrops(): void {
     for (let i = drops.length - 1; i >= 0; i--) {
-      const d = drops[i] as unknown as { stack?: ItemStack; dead: boolean };
+      const d = drops[i] as unknown as { stack?: ItemStack; dead: boolean; pos?: Vec3 };
       if (d instanceof DropEntity) continue;
-      // 裸结构：挑出 stack 后重建 DropEntity
+      // 裸结构：先取 pos 再 splice——之前反过来取 drops[i]（已错位）导致掉落物全落玩家头上
       const stack = d.stack ?? { key: 'ITEM_RAW_PORK', count: 1 };
+      const pos: Vec3 = d.pos ?? { ...player.pos };
       drops.splice(i, 1);
-      drops.push(new DropEntity({ ...(drops[i]?.pos ?? player.pos) }, stack));
+      drops.push(new DropEntity({ ...pos }, stack));
     }
   }
 
@@ -667,4 +725,5 @@ function showFirstRunMask(app: HTMLElement, spawn: { x: number; y: number; z: nu
   });
 }
 
+installErrorOverlay();
 boot();
