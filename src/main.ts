@@ -108,29 +108,11 @@ function boot(): void {
   const sky = new SkySystem(renderer, daycycle);
   // 玩家位置：存档优先
   const p0 = saved?.player.p;
-  // 读档位置合法性校验：卡在液体/固体里（如存档时泡在水下）→ 回出生点重新落地
-  let spawnPos = {
+  const player = new PlayerController({
     x: p0 ? p0[0] : world.spawnPoint.x + 0.5,
     y: p0 ? p0[1] : world.spawnPoint.y + 2,
     z: p0 ? p0[2] : world.spawnPoint.z + 0.5,
-  };
-  if (p0) {
-    const fx = Math.floor(spawnPos.x);
-    const fz = Math.floor(spawnPos.z);
-    const bodyInBad =
-      world.isLiquid(fx, Math.floor(spawnPos.y + 0.5), fz) ||
-      world.isSolid(fx, Math.floor(spawnPos.y + 0.5), fz) ||
-      world.isSolid(fx, Math.floor(spawnPos.y + 1.5), fz);
-    if (bodyInBad) {
-      console.warn('[mini-world] 存档位置不可用（水中/卡方块），回到出生点');
-      spawnPos = {
-        x: world.spawnPoint.x + 0.5,
-        y: world.spawnPoint.y + 2,
-        z: world.spawnPoint.z + 0.5,
-      };
-    }
-  }
-  const player = new PlayerController(spawnPos);
+  });
   player.yaw = saved?.player.yaw ?? 0;
   player.pitch = saved?.player.pitch ?? 0;
   player.hp = saved?.player.hp ?? 20;
@@ -254,6 +236,21 @@ function boot(): void {
       return;
     }
     if (world.getBlock(pos.x, pos.y, pos.z) !== BLOCK.AIR) return;
+    // 防自埋：目标格不得与玩家 AABB（0.6 宽 × 1.8 高，脚底中心锚点）相交
+    const px = player.pos.x;
+    const py = player.pos.y;
+    const pz = player.pos.z;
+    const overlapsPlayer =
+      pos.x + 1 > px - 0.3 &&
+      pos.x < px + 0.3 &&
+      pos.y + 1 > py &&
+      pos.y < py + 1.8 &&
+      pos.z + 1 > pz - 0.3 &&
+      pos.z < pz + 0.3;
+    if (overlapsPlayer) {
+      hud.showToast('不能把方块放在自己身上');
+      return;
+    }
     world.setBlock(pos.x, pos.y, pos.z, itemDef.place);
     inv.consumeHeld(1);
     sfx('place');
@@ -400,6 +397,7 @@ function boot(): void {
 
   // ---- 主循环 ----
   let last = performance.now();
+  let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
 
   function frame(now: number): void {
     requestAnimationFrame(frame);
@@ -421,6 +419,39 @@ function boot(): void {
 
     stats.tick(dt);
     world.tick(player.pos);
+
+    // ---- 卡方块自救（每帧检查）：身体嵌在固体里且持续无法移动时，
+    //      抬升到该柱最高实心面之上。覆盖「读档位置被方块埋住」「放置事故」等情形。
+    //      读档校验放在这里而非启动时：启动瞬间 chunk 未加载，getBlock 全 AIR 校验无效。
+    if (world.isSolid(Math.floor(player.pos.x), Math.floor(player.pos.y + 0.9), Math.floor(player.pos.z))) {
+      stuckFrames += 1;
+      if (stuckFrames > 30) {
+        // 从玩家当前位置向上找第一个「脚下实心、身位两格空」的安全落脚点；
+        // 找不到（极端封闭空间）就顶到世界顶端再落下
+        const fx = Math.floor(player.pos.x);
+        const fz = Math.floor(player.pos.z);
+        const footY = Math.floor(player.pos.y);
+        let safeY = -1;
+        for (let y = footY; y < 63; y++) {
+          if (
+            world.isSolid(fx, y - 1, fz) &&
+            !world.isSolid(fx, y, fz) &&
+            !world.isSolid(fx, y + 1, fz)
+          ) {
+            safeY = y;
+            break;
+          }
+        }
+        player.pos.y = (safeY >= 0 ? safeY : 62) + 0.01;
+        player.vel.x = 0;
+        player.vel.y = 0;
+        player.vel.z = 0;
+        stuckFrames = 0;
+        hud.showToast('检测到卡方块——已移到安全位置');
+      }
+    } else {
+      stuckFrames = 0;
+    }
 
     // ---- 生物 tick 与清理 ----
     const isNight = daycycle.isNight;
