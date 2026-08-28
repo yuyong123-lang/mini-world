@@ -448,6 +448,9 @@ function boot(): void {
     sky.update(dt);
     const eye = player.eyePosition();
     renderer.camera.position.set(eye.x, eye.y, eye.z);
+    // 朝向同步：yaw 绕 Y、pitch 绕 X（欧拉序 YXZ），与 controller 的 lookDir 公式一致
+    // （此前只同步了位置——相机永远朝向初始机位方向，画面与视角输入完全脱节）
+    renderer.camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
     hud.setHotbarIndex(inv.hotbarIndex);
     hud.renderHotbar();
     renderer.renderFrame(dt);
