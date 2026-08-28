@@ -34,6 +34,7 @@ function makeBoxMesh(color: number, w: number, h: number): THREE.Mesh {
 }
 import { SkySystem } from './render/sky';
 import { ParticleSystem, tileAverageColor } from './render/particles';
+import { createPlayerModel, type PlayerModel } from './render/playerModel';
 import { initAudio, setMasterVolume, sfx } from './audio/audio';
 import { Settings, type SettingsData } from './core/settings';
 import { viewDistanceToFog } from './ui/menu';
@@ -120,6 +121,20 @@ function boot(): void {
   player.spawnPoint = { ...world.spawnPoint };
   const stats = new StatsSystem(player, bus);
   player.addJumpHook(() => stats.notifyJump());
+
+  // ---- 玩家身体模型（第三人称可见；第一人称隐藏）----
+  const playerModel: PlayerModel = createPlayerModel();
+  renderer.scene.add(playerModel.root);
+  playerModel.setVisible(false);
+
+  // F5 切换第一/第三人称（浏览器刷新语义已被 preventDefault 拦截）
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F5') return;
+    e.preventDefault();
+    const mode = player.toggleViewMode();
+    playerModel.setVisible(mode === 'third');
+    hud.showToast(mode === 'third' ? '第三人称视角' : '第一人称视角');
+  });
 
   // ---- 设置与音效（W11 接线：T103/T104 消费端）----
   const settings: SettingsData = Settings.load();
@@ -495,11 +510,44 @@ function boot(): void {
 
     particles.update(dt);
     sky.update(dt);
+    // ---- 相机（第一/第三人称）----
     const eye = player.eyePosition();
-    renderer.camera.position.set(eye.x, eye.y, eye.z);
+    const camPos = player.cameraPosition({ x: 0, y: 0, z: 0 });
+    if (player.viewMode === 'third') {
+      // 防穿墙：理想点位被体素挡住时，把相机拉近到与玩家之间不穿帮的距离
+      const dir = {
+        x: camPos.x - eye.x,
+        y: camPos.y - eye.y,
+        z: camPos.z - eye.z,
+      };
+      const len = Math.hypot(dir.x, dir.y, dir.z) || 1;
+      const step = 0.15;
+      let t = len;
+      while (t > 0) {
+        const sx = eye.x + (dir.x / len) * t;
+        const sy = eye.y + (dir.y / len) * t;
+        const sz = eye.z + (dir.z / len) * t;
+        if (!world.isSolid(Math.floor(sx), Math.floor(sy), Math.floor(sz))) break;
+        t -= step;
+      }
+      renderer.camera.position.set(
+        eye.x + (dir.x / len) * Math.max(0, t),
+        eye.y + (dir.y / len) * Math.max(0, t),
+        eye.z + (dir.z / len) * Math.max(0, t),
+      );
+    } else {
+      renderer.camera.position.set(eye.x, eye.y, eye.z);
+    }
     // 朝向同步：yaw 绕 Y、pitch 绕 X（欧拉序 YXZ），与 controller 的 lookDir 公式一致
-    // （此前只同步了位置——相机永远朝向初始机位方向，画面与视角输入完全脱节）
     renderer.camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+
+    // ---- 玩家模型同步（第三人称才可见）----
+    if (player.viewMode === 'third') {
+      playerModel.root.position.set(player.pos.x, player.pos.y, player.pos.z);
+      playerModel.root.rotation.y = player.yaw;
+      const hSpeed = Math.hypot(player.vel.x, player.vel.z);
+      playerModel.animate(dt, Math.min(1, hSpeed / 4.3), hSpeed > 0.3);
+    }
     hud.setHotbarIndex(inv.hotbarIndex);
     hud.renderHotbar();
     renderer.renderFrame(dt);

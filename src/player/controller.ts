@@ -27,6 +27,10 @@ const SWIM_UP_ACCEL = 16;
 /** 眼高（格）。注意：契约 constants.ts 没有 EYE_HEIGHT，故就地定义；
  *  pos 锚点是「脚底中心」，所以眼睛 = pos + 1.62 */
 const EYE_HEIGHT = 1.62;
+/** 第三人称相机后撤距离（格） */
+const CAM_BACK_DIST = 4.2;
+/** 第三人称相机相对眼点的抬升（格）——越肩俯视感 */
+const CAM_UP_DIST = 1.1;
 /** 玩家碰撞盒尺寸（契约 §10：AABB 由脚底中心锚点 + width/height 推导） */
 const PLAYER_WIDTH = 0.6;
 const PLAYER_HEIGHT = 1.8;
@@ -157,6 +161,34 @@ export class PlayerController implements PhysicsBody {
     if (Number.isFinite(radPerPx) && radPerPx > 0) this.sensitivity = radPerPx;
   }
   private sensitivity: number | null = null;
+
+  /** 视角模式：first=第一人称；third=第三人称越肩（相机后上方） */
+  viewMode: 'first' | 'third' = 'first';
+  toggleViewMode(): 'first' | 'third' {
+    this.viewMode = this.viewMode === 'first' ? 'third' : 'first';
+    return this.viewMode;
+  }
+
+  /**
+   * 相机应处的位置：第一人称=眼睛；第三人称=眼睛沿视线的反方向后撤
+   * CAM_BACK_DIST 并抬高 CAM_UP_DIST（越肩视角）。
+   * @returns 是否被体素截断的信息由调用方处理（本方法只给理想点位）
+   */
+  cameraPosition(out: Vec3): Vec3 {
+    const eye = this.eyePosition();
+    if (this.viewMode === 'first') {
+      out.x = eye.x;
+      out.y = eye.y;
+      out.z = eye.z;
+      return out;
+    }
+    const dir: Vec3 = { x: 0, y: 0, z: 0 };
+    this.lookDir(dir);
+    out.x = eye.x - dir.x * CAM_BACK_DIST;
+    out.y = eye.y - dir.y * CAM_BACK_DIST + CAM_UP_DIST;
+    out.z = eye.z - dir.z * CAM_BACK_DIST;
+    return out;
+  }
 
   /** 是否处于水中（每帧 tick 更新）；摔落伤豁免与水下视觉可查询 */
   inWater = false;
