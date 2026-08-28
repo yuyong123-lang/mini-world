@@ -127,10 +127,10 @@ function boot(): void {
   renderer.scene.add(playerModel.root);
   playerModel.setVisible(false);
 
-  // F5 切换第一/第三人称（浏览器刷新语义已被 preventDefault 拦截）
+  // V 键切换第一/第三人称（不用 F5：那是浏览器刷新键，会重载页面丢指针锁定，
+  // 用户侧表现为"突然走不了也挖不了"——已踩坑，勿改回）
   window.addEventListener('keydown', (e) => {
-    if (e.code !== 'F5') return;
-    e.preventDefault();
+    if (e.code !== 'KeyV') return;
     const mode = player.toggleViewMode();
     playerModel.setVisible(mode === 'third');
     hud.showToast(mode === 'third' ? '第三人称视角' : '第一人称视角');
@@ -324,8 +324,26 @@ function boot(): void {
     bus.emit('invChanged', {});
   });
   document.addEventListener('pointerlockchange', () => {
-    if (!document.pointerLockElement && !invUI.isOpen() && !craftUI.isOpen()) {
-      hud.showToast('点击画面继续游戏');
+    const lockHint = document.getElementById('lock-hint');
+    if (!document.pointerLockElement) {
+      // 未锁定：显示常驻提示条（不自动消失——之前的 toast 3 秒就没了，用户看不到）
+      if (!lockHint && !invUI.isOpen() && !craftUI.isOpen()) {
+        const hint = document.createElement('div');
+        hint.id = 'lock-hint';
+        hint.textContent = '点击画面锁定鼠标开始游戏（WASD 移动 · V 切换视角 · E 背包）';
+        document.body.appendChild(hint);
+        const style = document.createElement('style');
+        style.textContent = `
+#lock-hint{position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:45;
+  background:rgba(15,18,26,.85);color:#ffd75e;padding:12px 26px;border-radius:8px;
+  font-size:16px;font-family:sans-serif;pointer-events:none;border:1px solid rgba(255,215,94,.4)}`;
+        style.id = 'lock-hint-style';
+        document.head.appendChild(style);
+      }
+    } else {
+      // 已锁定：撤掉提示
+      lockHint?.remove();
+      document.getElementById('lock-hint-style')?.remove();
     }
   });
 
@@ -398,7 +416,8 @@ function boot(): void {
     for (let i = monsters.length - 1; i >= 0; i--) if (monsters[i].dead) monsters.splice(i, 1);
   }
 
-  // ---- M3 简易续档遮罩（W10 换成完整主菜单）----
+  // ---- 启动遮罩：新世界显示欢迎+操作说明；读档玩家不弹遮罩，
+  //      由 pointerlockchange 的常驻提示条引导点击进入 ----
   if (!saved) {
     showFirstRunMask(app, world.spawnPoint);
   }
