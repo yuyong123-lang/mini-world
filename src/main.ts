@@ -37,7 +37,8 @@ import { ParticleSystem, tileAverageColor } from './render/particles';
 import { createPlayerModel, type PlayerModel } from './render/playerModel';
 import { initAudio, setMasterVolume, sfx } from './audio/audio';
 import { Settings, type SettingsData } from './core/settings';
-import { viewDistanceToFog } from './ui/menu';
+import { MenuSystem, viewDistanceToFog } from './ui/menu';
+import { clearSave, hasSave } from './save/storage';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
 import {
@@ -364,11 +365,17 @@ function boot(): void {
   document.addEventListener('pointerlockchange', () => {
     const lockHint = document.getElementById('lock-hint');
     if (!document.pointerLockElement) {
-      // 未锁定：显示常驻提示条（不自动消失——之前的 toast 3 秒就没了，用户看不到）
-      if (!lockHint && !invUI.isOpen() && !craftUI.isOpen()) {
+      // ESC 释放指针锁 → 弹暂停菜单（继续/设置/重新开始/保存退出）；
+      // 背包/合成面板开着时的解锁不算暂停（那是面板自己的解锁流程）
+      if (!invUI.isOpen() && !craftUI.isOpen()) {
+        menu.showPause();
+        return;
+      }
+      // 面板解锁场景：保留原有提示条引导
+      if (!lockHint) {
         const hint = document.createElement('div');
         hint.id = 'lock-hint';
-        hint.textContent = '点击画面锁定鼠标开始游戏（WASD 移动 · V 切换视角 · E 背包）';
+        hint.textContent = '按 E 关闭面板后点击画面继续（WASD 移动 · V 切换视角）';
         document.body.appendChild(hint);
         const style = document.createElement('style');
         style.textContent = `
@@ -453,6 +460,58 @@ function boot(): void {
     }
     for (let i = monsters.length - 1; i >= 0; i--) if (monsters[i].dead) monsters.splice(i, 1);
   }
+
+  // ---- 配置/暂停菜单（W10 MenuSystem 正式接线）----
+  // ESC 释放指针锁 → 暂停菜单；提供继续/设置/重新开始/保存退出/主菜单全套入口。
+  // 「重新开始」= 重玩当前世界：保留 seed 与地形改动，重置时间/状态/位置到出生点。
+  /** 重置运行时状态到新开局的共用逻辑（不重载页面，世界 diffs 保留或清空由调用方决定） */
+  function resetRuntimeState(opts: { resetDiffs: boolean; time: number }): void {
+    if (opts.resetDiffs) {
+      world.diffs.clear();
+      // 已加载 chunk 带着旧 diff 数据——全部标脏让 worker 重生成
+      for (const [, c] of world.chunks) c.dirty = true;
+    }
+    daycycle.timeOfDay = opts.time;
+    player.respawn();
+    player.spawnPoint = { ...world.spawnPoint };
+    // 背包清空
+    for (let i = 0; i < inv.slots.length; i++) inv.slots[i] = null;
+    // 掉落物清空
+    drops.length = 0;
+    stats.reset();
+    bus.emit('hp', { v: player.hp });
+    bus.emit('hunger', { v: player.hunger });
+    bus.emit('invChanged', {});
+  }
+
+  const menu = new MenuSystem(app, {
+    hasSave: () => hasSave(),
+    onContinue: () => {
+      void app.requestPointerLock?.();
+    },
+    onResume: () => {
+      void app.requestPointerLock?.();
+    },
+    onNewWorld: () => {
+      clearSave();
+      // 最干净的换世界方式：清档 + 重置状态 + 换 seed 重载页面
+      // （World 的 worker 通道/初始 diffs 均按 seed 绑定，页面重载最可靠）
+      try {
+        localStorage.setItem('mini_world_next_seed', Math.random().toString(36).slice(2, 10));
+      } catch { /* 隐私模式下忽略，沿用固定 seed */ }
+      location.reload();
+    },
+    onRestartWorld: () => {
+      resetRuntimeState({ resetDiffs: false, time: DAY_LENGTH * 0.5 });
+      saveGame(snapshot());
+      void app.requestPointerLock?.();
+      hud.showToast('本世界已重新开始');
+    },
+    onSaveExit: () => {
+      saveGame(snapshot());
+      menu.showMain();
+    },
+  });
 
   // ---- 启动遮罩：新世界显示欢迎+操作说明；读档玩家不弹遮罩，
   //      由 pointerlockchange 的常驻提示条引导点击进入 ----

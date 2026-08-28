@@ -83,6 +83,10 @@ export interface MenuHooks {
    * 缺省回落 onContinue。差异在于 main 可以只做「重锁指针」而不重读档。
    */
   onResume?(): void;
+  /** 可选扩展：暂停页「重新开始本世界」（保留存档种子，重置时间/背包/位置到出生点）。
+   *  与 onNewWorld（清档换种子）不同：这是「重玩当前世界」。不传则不显示该按钮。
+   */
+  onRestartWorld?(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +337,7 @@ export class MenuSystem {
     const out: HTMLElement[] = [];
     out.push(this.makeButton('继续游戏', this.hooks.onResume ? 'resume' : 'continue'));
     out.push(this.makeButton('设 置', 'settings-from-pause'));
+    if (this.hooks.onRestartWorld) out.push(this.makeButton('重新开始本世界', 'restart-world', 'ghost'));
     if (this.hooks.onSaveExit) out.push(this.makeButton('保存并退出到主菜单', 'save-exit', 'ghost'));
     return out;
   }
@@ -426,6 +431,11 @@ export class MenuSystem {
       case 'save-exit':
         this.hide();
         this.hooks.onSaveExit?.();
+        break;
+      case 'restart-world':
+        this.hide();
+        this.markResume();
+        this.hooks.onRestartWorld!(); // buildPauseButtons 保证仅在注入了该钩子时才可达
         break;
       case 'start-test':
         this.hide();
