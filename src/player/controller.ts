@@ -198,6 +198,11 @@ export class PlayerController implements PhysicsBody {
     return this.keys.size === 0 ? '无' : [...this.keys].map((k) => k.replace('Key', '').replace('ShiftLeft', 'Shift')).join('+');
   }
 
+  /** 诊断用：按键表大小 */
+  debugKeyCount(): number {
+    return this.keys.size;
+  }
+
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!PlayerController.TRACKED_CODES.has(e.code)) return;
     if (e.code === 'Space') e.preventDefault(); // 空格默认会滚动页面

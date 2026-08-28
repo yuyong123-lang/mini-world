@@ -464,6 +464,7 @@ function boot(): void {
   let last = performance.now();
   let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
   let diagTick = 0;    // 诊断面板刷新节流
+  const probe = { frames: 0, line: '[探针] 等待采样…' };
 
   // ---- 屏幕诊断 HUD（左上角小字）：主循环活着 + 玩家内部状态一目了然 ----
   const diag = document.createElement('div');
@@ -517,7 +518,16 @@ function boot(): void {
         if (craftUI.isOpen()) craftUI.close();
       }
     } else {
+      const preX = player.vel.x;
+      const preZ = player.vel.z;
       guard('player', () => player.tick(dt, world));
+      // 逐帧探针：tick 是否真的执行 + 速度是否被合成（解决"键在但 vel 恒 0"的现场之谜）
+      probe.frames++;
+      if (probe.frames % 60 === 0) {
+        probe.line =
+          `[探针] 60帧: tick跑了${probe.frames}次 | 本帧前后 vel.x ${preX.toFixed(2)}→${player.vel.x.toFixed(2)} ` +
+          `vel.z ${preZ.toFixed(2)}→${player.vel.z.toFixed(2)} | keys.size=${player.debugKeyCount()}`;
+      }
       guard('interactor', () => interactor.update(inv.heldItem(), dt, null));
       const t = interactor.currentTarget();
       guard('hud', () => hud.setTargetName(t ? BlockRegistry.get(t.blockId).name : ''));
@@ -660,8 +670,8 @@ function boot(): void {
       );
       const footLoaded = footChunk ? '有' : '无';
       diag.textContent =
-        `fps≈${Math.round(1 / Math.max(dt, 1e-3))} | 锁定:${document.pointerLockElement ? '是' : '否'} ` +
-        `| 键:${player.debugKeys()} | 面板:${panel} | 模式:${player.viewMode}\n` +
+        `${probe.line} | 键:${player.debugKeys()} | 面板:${panel}\n` +
+        `fps≈${Math.round(1 / Math.max(dt, 1e-3))} 锁定:${document.pointerLockElement ? '是' : '否'} 模式:${player.viewMode}\n` +
         `pos(${nan(p.x)},${nan(p.y)},${nan(p.z)}) vel(${nan(v.x)},${nan(v.y)},${nan(v.z)}) ` +
         `| 水中:${player.inWater ? '是' : '否'} hp:${player.hp.toFixed(0)} 饥饿:${player.hunger.toFixed(1)}\n` +
         `区块:${world.chunks.size} 脚下:${footLoaded} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
