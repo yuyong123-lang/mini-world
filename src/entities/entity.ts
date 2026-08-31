@@ -72,6 +72,8 @@ export abstract class Entity implements PhysicsBody {
   height: number;
   onGround = false;
   hp: number;
+  /** 满血值（构造时的初始 hp）；血条显示的 100% 基准 */
+  readonly maxHp: number;
   dead = false;
   /** 受击无敌帧截止时间戳(ms)；nowMs() < invulUntil 期间免伤 */
   invulUntil = 0;
@@ -88,6 +90,7 @@ export abstract class Entity implements PhysicsBody {
     this.width = size.width;
     this.height = size.height;
     this.hp = hp;
+    this.maxHp = hp;
   }
 
   /** 子类实现的每帧逻辑（重力/移动/交互等） */

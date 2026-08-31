@@ -161,10 +161,12 @@ export class Renderer {
     this.gl = new THREE.WebGLRenderer({ antialias: true });
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     this.gl.setPixelRatio(Math.min(dpr, MAX_PIXEL_RATIO));
+    // setSize 必须同步 CSS 尺寸（updateStyle 默认 true）。曾传 false：高 DPI
+    // （Windows 125%/150% 缩放）下 canvas 按放大后的 buffer 尺寸原样显示，
+    // 画面放大溢出被裁——射线中心跑到视口中心右下方，准星系统性偏移一格。
     this.gl.setSize(
       container.clientWidth || window.innerWidth,
       container.clientHeight || window.innerHeight,
-      false,
     );
     this.gl.domElement.style.display = 'block';
     container.appendChild(this.gl.domElement);
@@ -276,7 +278,8 @@ export class Renderer {
     if (w <= 0 || h <= 0) return; // hidden/未布局时跳过，等下次 resize 再恢复
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.gl.setSize(w, h, false);
+    // 同上：CSS 尺寸必须同步（逻辑 w×h），buffer 尺寸交给 pixelRatio 处理
+    this.gl.setSize(w, h);
   }
 
   /** 移除 resize 监听并立即释放 GL 上下文（页面切换/测试收尾用） */

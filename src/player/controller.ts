@@ -120,7 +120,13 @@ export class PlayerController implements PhysicsBody {
     if (this.boundRoot === domRoot) return;
     this.boundRoot = domRoot;
 
-    domRoot.addEventListener('click', () => {
+    domRoot.addEventListener('click', (e) => {
+      // 面板打开期间：门控返回 true → 点击永远不锁定（鼠标保持可用）
+      if (this.pointerLockGate?.()) return;
+      // 只有直接点击画面（canvas）才请求指针锁定。此前任何点击（含冒泡上来的）
+      // 都会触发锁定——背包/合成/熔炉面板里选物品、暂停菜单点按钮时鼠标会被
+      // 突然抢走直接进游戏（面板遭强制关闭）。UI DOM 不是 canvas，天然被排除。
+      if (!(e.target instanceof HTMLCanvasElement)) return;
       try {
         const req: unknown = domRoot.requestPointerLock();
         if (req instanceof Promise) req.catch(() => {}); // 浏览器拒绝锁定时的 Promise 形式
@@ -135,6 +141,13 @@ export class PlayerController implements PhysicsBody {
     document.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur); // 失焦清空按键，防止“卡键”漂移
   }
+
+  /**
+   * 指针锁定门控（main 注入）：返回 true 时点击画面不请求锁定。
+   * 用于「面板打开期间鼠标必须一直可用」——背包/合成/熔炉开着时，
+   * 误点画面空白不会被拉回游戏，只能经面板自己的关闭路径（E 键）退出。
+   */
+  pointerLockGate: (() => boolean) | null = null;
 
   /** 测试与集成注入口：与一次真实按下/抬起等效，不走 DOM 事件 */
   setKey(code: string, down: boolean): void {
@@ -203,6 +216,19 @@ export class PlayerController implements PhysicsBody {
     return this.keys.size;
   }
 
+  /** 诊断用：当前输入合成的水平移动方向（与 tick 完全同源），鉴别 dir 恒 (0,0) 类故障 */
+  debugMoveDir(): string {
+    const keysState: MoveKeysState = {
+      w: this.keys.has('KeyW'),
+      a: this.keys.has('KeyA'),
+      s: this.keys.has('KeyS'),
+      d: this.keys.has('KeyD'),
+    };
+    const d = computeMoveDir(this.yaw, keysState);
+    const f = (v: number): string => (Number.isFinite(v) ? v.toFixed(2) : 'NaN!');
+    return `(${f(d.x)},${f(d.z)})`;
+  }
+
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!PlayerController.TRACKED_CODES.has(e.code)) return;
     if (e.code === 'Space') e.preventDefault(); // 空格默认会滚动页面
@@ -249,6 +275,15 @@ export class PlayerController implements PhysicsBody {
       s: this.keys.has('KeyS'),
       d: this.keys.has('KeyD'),
     };
+
+    // yaw/pitch NaN 防御：一旦被污染，computeMoveDir 返回 (0,0)——水平移动永久锁死
+    // （vel 恒 0、pos 不动、键位诊断却一切正常），且视角消失。检测到即归零自救。
+    if (!Number.isFinite(this.yaw) || !Number.isFinite(this.pitch)) {
+      console.warn(`[player] 朝向 NaN（yaw=${this.yaw} pitch=${this.pitch}），归零自救`);
+      this.yaw = Number.isFinite(this.yaw) ? this.yaw : 0;
+      this.pitch = Number.isFinite(this.pitch) ? this.pitch : 0;
+    }
+
     const f = (keysState.w ? 1 : 0) - (keysState.s ? 1 : 0);
 
     // FIXME(W6): 冲刺还要求 hunger>0；survival 数值系统未接线前先不含 hunger 条件，

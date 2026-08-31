@@ -34,8 +34,10 @@ const MAX_SUBSTEPS = 256;
  * 新位置盒体覆盖到的整数体素里是否有实心块。
  * 半开区间语义：恰好与某面齐平（距离为 0）不算重叠——
  * min 端 floor(v+EPS)、max 端 floor(v-EPS)，两侧的 EPS 同时吸收浮点舍入噪声。
+ * 导出：main 的卡方块自救必须用同一判定（旧版只查中心一点，存在偏心嵌入盲区：
+ * 碰撞侧全盒堵死 → vel 每帧清零 → 冻结，而单点自救永远不触发）。
  */
-function solidInBox(
+export function solidInBox(
   world: SolidQuery,
   minX: number, minY: number, minZ: number,
   maxX: number, maxY: number, maxZ: number,
