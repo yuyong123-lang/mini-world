@@ -23,6 +23,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   Texture,
+  Vector3,
 } from 'three';
 import { REACH } from '../core/constants';
 import { CRACK_TILE_START } from '../blocks/atlas';
@@ -130,7 +131,9 @@ function isSelectable(id: number): boolean {
 /** 与 three.PerspectiveCamera 结构兼容的最小相机面（duck typing，避免耦合渲染器实现） */
 export interface CameraLike {
   position: Vec3;
-  // three 的 getWorldDirection(target: Vector3): Vector3 为方法语法（参数双变），结构上可直接赋值
+  // 注意：three 的真实实现会调 target.set(x,y,z)——调用方必须传入 Vector3 实例，
+  // 普通 {x,y,z} 字面量会抛 "target.set is not a function"。本接口签名收窄为 Vec3
+  // 仅为 duck typing 便利（PerspectiveCamera 参数双变可赋值兼容）。
   getWorldDirection(target: Vec3): Vec3;
 }
 
@@ -189,6 +192,9 @@ const HIGHLIGHT_SIZE = 1.001;
 
 /**
  * 准星交互器：每帧 DDA 选块 → 维护高亮线框与挖掘进度，左右键产生事件但不写世界。
+ * 射线源是**渲染相机**（位置 + 朝向），而非玩家眼睛：第一人称两者重合；第三人称
+ * 相机在眼后 4.2 格，若仍从眼睛发射，视线与屏幕中心产生视差（准星指 A 挖 B）。
+ * 射程 = REACH + 相机到眼睛的距离（第三人称补偿，保证够得着等深处方块）。
  * 实际传 three.PerspectiveCamera / PlayerController / World 均满足上述结构面。
  */
 export class Interactor {
@@ -212,6 +218,8 @@ export class Interactor {
   private breakCb: ((pos: Vec3, blockId: number) => void) | undefined;
   private placeCb: ((pos: Vec3) => void) | undefined;
   private useCraftCb: (() => void) | undefined;
+  /** 熔炉使用回调：payload 为方块坐标序列化 key（"x,y,z"）， FurnaceSystem 的状态键 */
+  private useFurnaceCb: ((furnaceKey: string) => void) | undefined;
   private destroyed = false;
 
   constructor(
@@ -264,11 +272,16 @@ export class Interactor {
   /** 每帧入口：重做射线、刷新高亮与挖掘进度。targetEl 传 null 时跳过 HUD 写入 */
   update(heldItem: ItemStack | null, dt: number, targetEl: HTMLElement | null): void {
     if (this.destroyed) return;
+    // 射线从渲染相机出发（与屏幕中心严格共线）；射程补偿相机→眼的额外距离，
+    // 使第三人称的可及深度与第一人称一致。相机位置由 main 每帧在本调用前同步。
+    const camPos = this.camera.position;
+    const eye = this.resolveEye();
+    const extra = Math.hypot(camPos.x - eye.x, camPos.y - eye.y, camPos.z - eye.z);
     const hit = ddaRaycast(
       (x, y, z) => this.world.getBlock(x, y, z),
-      this.resolveEye(),
+      { x: camPos.x, y: camPos.y, z: camPos.z },
       this.resolveLook(),
-      REACH,
+      REACH + extra,
     );
     this.target = hit.hit ? hit : null;
     const key = this.target
@@ -305,6 +318,10 @@ export class Interactor {
     this.useCraftCb = cb;
   }
 
+  onUseFurnace(cb: (furnaceKey: string) => void): void {
+    this.useFurnaceCb = cb;
+  }
+
   /** 挖掘进度 0..1，HUD 进度条数据源 */
   breakProgress(): number {
     return Math.min(1, Math.max(0, this.progress));
@@ -317,7 +334,7 @@ export class Interactor {
 
   /**
    * 右键动作入口（mouse 处理器路由到此，node 测试亦直接调用）：
-   * 命中工作台 → 使用回调优先；否则发放置事件（payload = 命中体的 prev 位）。
+   * 命中可交互方块（工作台/熔炉）→ 使用回调优先；否则发放置事件（payload = 命中体的 prev 位）。
    * prev 是否可用（AIR/不与实体 AABB 相交）由 main 校验后再真正 setBlock。
    */
   triggerUse(): void {
@@ -326,6 +343,10 @@ export class Interactor {
     if (!t) return;
     if (t.blockId === BLOCK.CRAFT_TABLE) {
       this.useCraftCb?.();
+      return;
+    }
+    if (t.blockId === BLOCK.FURNACE) {
+      this.useFurnaceCb?.(`${t.pos.x},${t.pos.y},${t.pos.z}`);
       return;
     }
     this.placeCb?.({ x: t.prev.x, y: t.prev.y, z: t.prev.z });
@@ -345,6 +366,7 @@ export class Interactor {
     this.breakCb = undefined;
     this.placeCb = undefined;
     this.useCraftCb = undefined;
+    this.useFurnaceCb = undefined;
     this.highlight.parent?.remove(this.highlight);
     this.highlight.geometry.dispose();
     (this.highlight.material as LineBasicMaterial).dispose();
@@ -370,18 +392,20 @@ export class Interactor {
     }
   }
 
+  /** 眼睛位置：不再作射线源，仅作射程补偿的基准点（相机到眼的距离） */
   private resolveEye(): Vec3 {
     const p = this.player as Partial<PlayerLike>;
     if (typeof p.eyePosition === 'function') return p.eyePosition();
-    return this.camera.position; // 降级：没有 PlayerController 时直接取相机位置
+    return this.camera.position; // 降级：没有 PlayerController 时补偿量为 0
   }
 
+  /** getWorldDirection 的工作缓冲：three 实现内部调 target.set()，必须传 Vector3 实例 */
+  private readonly lookTmp = new Vector3();
+
+  /** 射线方向 = 相机实际朝向（three getWorldDirection，与屏幕中心严格一致） */
   private resolveLook(): Vec3 {
-    const out: Vec3 = { x: 0, y: 0, z: 0 };
-    const p = this.player as Partial<PlayerLike>;
-    if (typeof p.lookDir === 'function') p.lookDir(out);
-    else this.camera.getWorldDirection(out);
-    return out;
+    this.camera.getWorldDirection(this.lookTmp);
+    return { x: this.lookTmp.x, y: this.lookTmp.y, z: this.lookTmp.z };
   }
 
   private syncHighlightBox(): void {

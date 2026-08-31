@@ -102,14 +102,15 @@ describe('storage 存读档 roundtrip', () => {
         ['apple', 1],
       ],
       diffs: { '0,0': { 1001: 3, 4096: 7 }, '-2,5': { 63: 12 } },
+      furnaces: {},
     });
     expect('v' in g).toBe(false);
   });
 
-  it('payload 顶层写 v:1 且落在 localStorage 指定键下', () => {
+  it('payload 顶层写 v:2 且落在 localStorage 指定键下', () => {
     saveGame(makeSource(), store);
     const raw = store.getItem(SAVE_KEY) as string;
-    expect(JSON.parse(raw).v).toBe(1);
+    expect(JSON.parse(raw).v).toBe(2);
   });
 
   it('保存后源对象继续变化不影响已写入的存档', () => {

@@ -17,7 +17,17 @@ import type { ItemStack } from '../core/types';
 export const SAVE_KEY = 'my_world_save_v1';
 
 /** 当前存档版本号（写入 payload 顶层，载入时强校验） */
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
+
+/** 单个熔炉的持久化快照（FurnaceState 的 JSON 友形，槽位为 [key,count] 元组） */
+export interface FurnaceSnapshot {
+  in: [string, number] | null;
+  fuel: [string, number] | null;
+  out: [string, number] | null;
+  burn: number;
+  total: number;
+  progress: number;
+}
 
 /** 玩家快照：脚底中心坐标 + 视角 + 生存数值 */
 export interface PlayerSnapshot {
@@ -37,6 +47,10 @@ export interface SavedGame {
   inv: ([string, number] | null)[];
   /** "cx,cz" → { 体素index: blockId } */
   diffs: Record<string, Record<number, number>>;
+  /** "x,y,z" → 熔炉三槽与燃烧/进度快照（v2 起；v1 旧档为空对象） */
+  furnaces: Record<string, FurnaceSnapshot>;
+  /** 装备槽（可选）：head/chest 各一格 [物品key, 数量] */
+  armor?: { head: [string, number] | null; chest: [string, number] | null };
 }
 
 /**
@@ -50,16 +64,22 @@ export interface SaveSource {
   player: PlayerSnapshot;
   inventorySlots: (ItemStack | null)[];
   diffs: Map<string, Map<number, number>>;
+  /** v2 起可选：熔炉状态持久化（"x,y,z" → 三槽 + 燃烧/进度快照） */
+  furnaces?: Record<string, FurnaceSnapshot>;
+  /** v2 起可选：装备槽持久化 */
+  armor?: { head: [string, number] | null; chest: [string, number] | null };
 }
 
 /** 落盘的真实结构（架构 §2.9），带版本号顶层字段 */
 interface SavePayload {
-  v: 1;
+  v: 1 | 2;
   seed: string;
   time: number;
   player: PlayerSnapshot;
   inv: ([string, number] | null)[];
   diffs: Record<string, Record<number, number>>;
+  furnaces?: Record<string, FurnaceSnapshot>;
+  armor?: { head: [string, number] | null; chest: [string, number] | null };
 }
 
 /**
@@ -115,6 +135,7 @@ export function saveGame(src: SaveSource, storage?: Storage): boolean {
     player,
     inv: serializeInventory(src.inventorySlots),
     diffs: serializeDiffs(src.diffs),
+    furnaces: src.furnaces ?? {},
   };
 
   try {
@@ -163,11 +184,12 @@ export function loadGame(storage?: Storage): SavedGame | null {
   return parsed;
 }
 
-/** 结构化校验（unknown → SavePayload）；仅挡住会导致下游崩溃的硬伤 */
+/** 结构化校验（unknown → SavePayload）；仅挡住会导致下游崩溃的硬伤。
+ *  接受 v1 与 v2：v2 新增可选 furnaces 字段，v1 旧档补空对象，双向兼容。 */
 function parsePayload(data: unknown): SavedGame | null {
   if (typeof data !== 'object' || data === null) return null;
   const o = data as Record<string, unknown>;
-  if (o.v !== SAVE_VERSION) return null;
+  if (o.v !== 1 && o.v !== 2) return null;
   if (typeof o.seed !== 'string') return null;
   if (typeof o.time !== 'number' || !Number.isFinite(o.time)) return null;
   if (!isRecord(o.diffs)) return null;
@@ -202,7 +224,55 @@ function parsePayload(data: unknown): SavedGame | null {
       return [slot[0] as string, slot[1] as number] as [string, number];
     }),
     diffs: normalizeDiffs(o.diffs),
+    furnaces: o.furnaces === undefined ? {} : normalizeFurnaces(o.furnaces),
+    armor: parseArmor(o.armor),
   };
+}
+
+/** 装备槽收紧：结构不合的槽位剔除（置 null）而非整体拒档 */
+function parseArmor(raw: unknown): { head: [string, number] | null; chest: [string, number] | null } | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) return undefined;
+  const slot = (v: unknown): [string, number] | null => {
+    if (!Array.isArray(v) || v.length < 2) return null;
+    if (typeof v[0] !== 'string' || typeof v[1] !== 'number') return null;
+    return [v[0], v[1]];
+  };
+  return { head: slot(raw.head), chest: slot(raw.chest) };
+}
+
+/** 逐熔炉收紧为 FurnaceSnapshot；结构不合的条目剔除而非整体拒档 */
+function normalizeFurnaces(raw: unknown): Record<string, FurnaceSnapshot> {
+  const out: Record<string, FurnaceSnapshot> = {};
+  if (!isRecord(raw)) return out;
+  for (const [key, val] of Object.entries(raw)) {
+    if (!isRecord(val)) continue;
+    const slot = (v: unknown): [string, number] | null => {
+      if (!Array.isArray(v) || v.length < 2) return null;
+      if (typeof v[0] !== 'string' || typeof v[1] !== 'number') return null;
+      return [v[0], v[1]];
+    };
+    const f = val as Record<string, unknown>;
+    if (
+      typeof f.burn !== 'number' ||
+      typeof f.total !== 'number' ||
+      typeof f.progress !== 'number' ||
+      !Number.isFinite(f.burn) ||
+      !Number.isFinite(f.total) ||
+      !Number.isFinite(f.progress)
+    ) {
+      continue;
+    }
+    out[key] = {
+      in: slot(f.in),
+      fuel: slot(f.fuel),
+      out: slot(f.out),
+      burn: f.burn,
+      total: f.total,
+      progress: f.progress,
+    };
+  }
+  return out;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
