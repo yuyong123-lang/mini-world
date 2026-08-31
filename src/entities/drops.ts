@@ -10,13 +10,14 @@ import { Entity, type EntityCtx } from './entity';
 export const DROP_LIFETIME_S = 300;
 /** 距玩家该距离内开始磁吸 */
 export const MAGNET_RADIUS = 1.5;
-/** 触发拾取请求的距离 */
+/** 触发拾取请求的水平距离 */
 export const PICKUP_RADIUS = 0.6;
+/** 拾取/磁吸的垂直高差容差（格）：台阶上下 1 格内都可拾（旧版 3D 距离判定
+ *  会把高差顶出半径——走过去永远差一点捡不起来） */
+export const PICKUP_VERT_TOLERANCE = 1.2;
 /** 同 key 合堆距离 */
 export const MERGE_RADIUS = 0.5;
-/** 磁吸加速度（格/s²） */
-const MAGNET_ACCEL = 40;
-/** 磁吸总速度上限（格/s） */
+/** 磁吸飞行速度上限（格/s）：位移式吸附的每秒移动距离 */
 const MAGNET_MAX_SPEED = 8;
 /** 落地弹跳能量保留系数 */
 export const BOUNCE_RESTITUTION = 0.4;
@@ -60,10 +61,16 @@ export class DropEntity extends Entity {
       return;
     }
 
+    // 嵌入方块自救：动物贴墙/贴方块死亡时，掉落点可能落在 solid 内——
+    // 嵌住的掉落物磁吸/拾取判定永远差一口气。检测到即弹到所在方块的顶面。
+    if (ctx.world.isSolid(Math.floor(this.pos.x), Math.floor(this.pos.y), Math.floor(this.pos.z))) {
+      this.pos.y = Math.floor(this.pos.y) + 1.01;
+      this.vel.y = 0;
+    }
+
     this.moveAndBounce(dt, ctx);
 
-    const toPlayerDist = dist(this.pos, ctx.playerPos);
-    if (this.tryMagnet(toPlayerDist, dt, ctx)) return; // 本帧已被磁吸拉向玩家
+    if (this.tryMagnet(dt, ctx)) return; // 本帧已被磁吸拉向玩家
     if (this.tryPickup(ctx)) return;
     this.mergeNearby(ctx);
   }
@@ -89,34 +96,36 @@ export class DropEntity extends Entity {
     this.vel.z *= f;
   }
 
-  /** 磁吸：进入范围后持续朝玩家加速。返回 true 表示本帧触发了磁吸 */
-  private tryMagnet(distToPlayer: number, dt: number, ctx: EntityCtx): boolean {
+  /** 磁吸：进入范围后**直接飞向玩家**（位移式吸附，无视地形遮挡）。
+   *  旧「加速度+碰撞」方案会被台阶/树干/方块缝隙挡住——掉落物卡住来回抖、
+   *  玩家反复经过都捡不起来。返回 true 表示本帧触发了磁吸。 */
+  private tryMagnet(dt: number, ctx: EntityCtx): boolean {
     if (this.age < INTERACT_COOLDOWN_S) return false;
-    if (distToPlayer >= MAGNET_RADIUS || distToPlayer <= PICKUP_RADIUS) return false;
-
     const dx = ctx.playerPos.x - this.pos.x;
     const dy = ctx.playerPos.y - this.pos.y;
     const dz = ctx.playerPos.z - this.pos.z;
-    const d = Math.max(distToPlayer, 1e-6);
-    this.vel.x += (dx / d) * MAGNET_ACCEL * dt;
-    this.vel.y += (dy / d) * MAGNET_ACCEL * dt;
-    this.vel.z += (dz / d) * MAGNET_ACCEL * dt;
+    const horiz = Math.hypot(dx, dz);
+    // 水平圆盘 + 垂直容差判定（原 3D 距离会把「上下差 1 格的台阶/坡地」顶出
+    // 半径外——掉落物卡在边缘来回抖、永远差一点捡不起来）
+    if (horiz >= MAGNET_RADIUS || Math.abs(dy) >= MAGNET_RADIUS) return false;
+    if (horiz <= PICKUP_RADIUS && Math.abs(dy) <= PICKUP_VERT_TOLERANCE) return false; // 交给拾取
 
-    const speed = Math.sqrt(this.vel.x ** 2 + this.vel.y ** 2 + this.vel.z ** 2);
-    if (speed > MAGNET_MAX_SPEED) {
-      const k = MAGNET_MAX_SPEED / speed;
-      this.vel.x *= k;
-      this.vel.y *= k;
-      this.vel.z *= k;
-    }
+    const d = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);
+    const step = Math.min(MAGNET_MAX_SPEED * dt, d); // 本帧吸附位移（不超剩余距离）
+    this.pos.x += (dx / d) * step;
+    this.pos.y += (dy / d) * step;
+    this.pos.z += (dz / d) * step;
+    this.vel.x = 0;
+    this.vel.y = 0;
+    this.vel.z = 0;
     return true;
   }
 
-  /** 拾取请求：<0.6 且 tryPickup 成功才置 dead；失败（背包满）保持存活下帧重试 */
+  /** 拾取请求：进入水平半径且垂直高差在容差内即尝试；背包满保持存活下帧重试 */
   private tryPickup(ctx: EntityCtx): boolean {
     if (this.dead) return true;
     if (this.age < INTERACT_COOLDOWN_S) return false;
-    if (dist(this.pos, ctx.playerPos) > PICKUP_RADIUS) return false;
+    if (!withinReach(this.pos, ctx.playerPos, PICKUP_RADIUS, PICKUP_VERT_TOLERANCE)) return false;
 
     if (ctx.tryPickup(this)) {
       this.dead = true; // main 据此发 pickup 成功信号并移出列表
@@ -153,4 +162,9 @@ export class DropEntity extends Entity {
 function dist(a: Vec3, b: Vec3): number {
   const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/** 拾取可达判定：水平圆盘（horizR）+ 垂直高差容差（vertTol） */
+function withinReach(a: Vec3, b: Vec3, horizR: number, vertTol: number): boolean {
+  return Math.hypot(a.x - b.x, a.z - b.z) <= horizR && Math.abs(a.y - b.y) <= vertTol;
 }

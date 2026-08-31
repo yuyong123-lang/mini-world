@@ -54,12 +54,21 @@ describe('tryAttack 命中与伤害', () => {
     expect(onHit).toHaveBeenLastCalledWith(near, 7);
   });
 
-  it('横向偏差超出 half-width 不命中', () => {
-    // 实体在正前 2m 但整体向 z+ 偏 0.6（half-width=0.3，且视线不扫过盒体）
+  it('近战兜底锥：平视擦顶的近距目标可命中；锥角外/超距不命中', () => {
+    // 正前 2m、横向偏 0.6（half-width=0.3，射线不扫过盒体）——
+    // 兜底锥（水平 <2.5 且夹角 <45°）内，平视擦顶也算命中（贴身挥拳语义）
     const offside = target(2, 40, 0.6);
     const onHit = vi.fn();
-    expect(tryAttack(EYE, FWD, [offside], SWORD_WOOD, onHit)).toBe(false);
-    expect(onHit).not.toHaveBeenCalled();
+    expect(tryAttack(EYE, FWD, [offside], SWORD_WOOD, onHit)).toBe(true);
+    expect(onHit).toHaveBeenCalled();
+
+    // 锥角外：横向偏 3（夹角 ≈56° > 45°）→ 不命中
+    const behindSide = target(2, 40, 3);
+    expect(tryAttack(EYE, FWD, [behindSide], SWORD_WOOD, onHit)).toBe(false);
+
+    // 超出兜底距离（3m）且射线不扫过盒体（横偏 0.6 > half-width）→ 不命中
+    const farGrazing = target(3, 40, 0.6);
+    expect(tryAttack(EYE, FWD, [farGrazing], SWORD_WOOD, onHit)).toBe(false);
 
     // 边界内（偏 0.29 < 0.3）贴边命中
     const grazing = target(2, 40, 0.29);

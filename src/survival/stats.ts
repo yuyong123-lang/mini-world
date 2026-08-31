@@ -8,6 +8,7 @@
 // 避免「公式里的 g」与「真实物理 g」出现两份来源。
 import { GRAVITY } from '../core/constants';
 import type { Vec3 } from '../core/types';
+import { reduceDamage } from './armor';
 
 /**
  * 玩家鸭子类型：只依赖 controller 已经公开的字段。
@@ -100,9 +101,13 @@ export class StatsSystem {
   /** death 事件只发一次；respawn 后外部调 reset() 清除 */
   private deadFired = false;
 
-  constructor(player: PlayerLike, bus: BusLike) {
+  /** 护甲减伤面（可选注入）：armorPoints() 返回当前总护甲点数 */
+  private readonly armor?: { armorPoints(): number };
+
+  constructor(player: PlayerLike, bus: BusLike, armor?: { armorPoints(): number }) {
     this.player = player;
     this.bus = bus;
+    this.armor = armor;
     this.lastPos = { x: player.pos.x, y: player.pos.y, z: player.pos.z };
     this.prevVelY = player.vel.y;
     this.wasOnGround = player.onGround;
@@ -199,6 +204,7 @@ export class StatsSystem {
   /**
    * 怪物近战伤害入口（W9 接线：Monster.attackPlayer → 本方法）。
    * 带 0.5s 受击无敌帧；可打到 0 触发一次性 death。
+   * 护甲减伤只作用于此入口（摔落/饿伤不经过，天然豁免——MC 口径）。
    * @param dmg 伤害点数
    * @param _from 攻击来源位置（当前无击退实现——玩家击退观感差，保留参数备将来）
    */
@@ -207,7 +213,8 @@ export class StatsSystem {
     const now = nowMs();
     if (now < this.playerInvulUntil) return; // 无敌帧
     this.playerInvulUntil = now + PLAYER_INVUL_MS;
-    this.applyDamage(Math.floor(dmg));
+    const pts = this.armor?.armorPoints() ?? 0;
+    this.applyDamage(Math.floor(reduceDamage(dmg, pts)));
   }
 
   // ── 内部变更路径 ─────────────────────────────────────────────────────────

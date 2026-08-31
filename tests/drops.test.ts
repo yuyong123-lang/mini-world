@@ -158,7 +158,7 @@ describe('DropEntity 磁吸与拾取', () => {
     advance(b, 1);
     expect(beforeCooldownEnd).toBeCloseTo(1.4, 6);
 
-    // 冷却结束后开始收敛（磁吸加速度 40、上限速度 8：约 10 帧内到达拾取距离）
+    // 冷却结束后开始收敛（位移式磁吸：8 格/s 直线飞向玩家，约 6 帧到达拾取距离）
     const samples: number[] = [];
     let pickedUp = false;
     for (let i = 0; i < 600 && !pickedUp; i++) {
@@ -170,11 +170,12 @@ describe('DropEntity 磁吸与拾取', () => {
       samples.push(distToPlayer());
     }
     expect(pickedUp).toBe(true);
-    expect(samples.length).toBeGreaterThanOrEqual(5); // 经历多帧而非瞬移
-    // 整体单调收敛：允许个别帧因重力/弹跳有微小回弹，但大部分帧必须缩短
-    const decreased = samples.filter((v, i) => i > 0 && v < samples[i - 1]).length;
-    expect(decreased).toBeGreaterThan((samples.length - 1) * 0.7);
-    expect(samples[samples.length - 1]).toBeLessThan(samples[0] - 0.3);
+    // 位移式吸附收敛很快（≤8 格/s），应在 ~20 帧内完成而非长时间拖尾
+    expect(samples.length).toBeLessThanOrEqual(20);
+    // 有位移的帧几乎全部更近（最后进入拾取半径的帧可能被剩余距离钳制持平）
+    const moved = samples.filter((v, i) => i > 0 && v !== samples[i - 1]);
+    const decreased = moved.filter((v, i) => i > 0 && v < moved[i - 1]).length;
+    expect(decreased).toBeGreaterThanOrEqual(moved.length - 1);
     expect(distToPlayer()).toBeLessThanOrEqual(0.6);
     expect(b.pickup.calls.length).toBeGreaterThanOrEqual(1);
     expect(b.pickup.calls[0].stack.key).toBe('ITEM_COAL');
@@ -322,4 +323,32 @@ describe('DropEntity 寿命与受击', () => {
     expect(box.minY).toBeCloseTo(SURFACE, 12);
     expect(box.maxY).toBeCloseTo(SURFACE + 0.25, 12);
   });
+});
+
+// ---------------------------------------------------------------------------
+// 拾取判定扩展：水平圆盘 + 垂直高差容差（台阶/坡地捡不起来的修复）
+// ---------------------------------------------------------------------------
+
+describe('DropEntity 高差拾取', () => {
+  it('掉落物在高差 1 格的台阶上：玩家走过去仍可磁吸+拾取', () => {
+    const p = vec(0, SURFACE, 0);
+    const b = makeCtx(p);
+    // 掉落物在玩家上方 1 格、水平 0.4（3D 距离 ≈1.08 —— 旧 3D 判定永远够不着）
+    const d = spawn(b.ctx, b.entities, vec(p.x + 0.4, SURFACE + 1, p.z), { key: 'ITEM_LEATHER', count: 1 });
+
+    advance(b, 40); // 越过冷却并推进
+    expect(b.pickup.calls.length).toBeGreaterThanOrEqual(1);
+    expect(d.dead).toBe(true);
+  });
+
+  it('掉落物在脚下 1 格（玩家站高处）：同样可拾取', () => {
+    const p = vec(0, SURFACE, 0);
+    const b = makeCtx(p);
+    const d = spawn(b.ctx, b.entities, vec(p.x + 0.3, SURFACE - 1, p.z), { key: 'ITEM_WOOL', count: 1 });
+
+    advance(b, 40);
+    expect(b.pickup.calls.length).toBeGreaterThanOrEqual(1);
+    expect(d.dead).toBe(true);
+  });
+
 });

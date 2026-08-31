@@ -87,6 +87,19 @@ export interface MenuHooks {
    *  与 onNewWorld（清档换种子）不同：这是「重玩当前世界」。不传则不显示该按钮。
    */
   onRestartWorld?(): void;
+  /**
+   * 可选扩展：装扮页四色/预设变化（即改即存由 main 负责）。不传则菜单只改本地
+   * 表单状态（main 不接 UI 的场景，纯冒烟用）。
+   */
+  onCosmeticsChange?(c: {
+    skin: string;
+    shirt: string;
+    pants: string;
+    hair: string;
+    preset: string;
+  }): void;
+  /** 可选：装扮页打开时回填当前四色（main 从 Cosmetics.load 取） */
+  loadCosmetics?(): { skin: string; shirt: string; pants: string; hair: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +148,7 @@ const SLIDER_SPECS: readonly SliderSpec[] = [
 const HELP_TEXT =
   'WASD 移动 · 空格跳跃 · Shift 疾跑 · 左键挖掘/攻击 · 右键放置/吃 · E 背包 · 数字键切换快捷栏 · P 手动保存';
 
-type PageName = 'main' | 'settings' | 'pause' | 'confirm-new';
+type PageName = 'main' | 'settings' | 'pause' | 'confirm-new' | 'cosmetics';
 
 /** 隐藏后重新上锁期间忽略 ESC 触发的宽限毫秒数（防止 resume 尚未生效时误弹暂停） */
 const RESUME_GRACE_MS = 300;
@@ -247,6 +260,12 @@ export class MenuSystem {
     this.renderPage('settings');
   }
 
+  /** 装扮页：四色板 + 预设。「完成」回到打开它的那一页（默认 main） */
+  showCosmetics(returnTo: PageName = 'main'): void {
+    this.settingsReturnTo = returnTo === 'cosmetics' ? 'main' : returnTo;
+    this.renderPage('cosmetics');
+  }
+
   /** ESC 暂停页：继续游戏（恢复指针锁）/ 设置 / 保存并退出到主菜单 */
   showPause(): void {
     this.renderPage('pause');
@@ -311,6 +330,11 @@ export class MenuSystem {
         this.captionEl.textContent = '';
         this.bodyEl.replaceChildren(...this.buildConfirmBody());
         break;
+      case 'cosmetics':
+        this.titleEl.textContent = '装扮';
+        this.captionEl.textContent = '颜色即改即存，第三人称（V 键）可见';
+        this.bodyEl.replaceChildren(...this.buildCosmeticsBody());
+        break;
     }
   }
 
@@ -329,6 +353,7 @@ export class MenuSystem {
       out.push(kind === 'continue' ? this.makeButton('继续游戏', 'continue') : this.makeButton('新世界', 'new'));
     }
     out.push(this.makeButton('设 置', 'settings'));
+    out.push(this.makeButton('扮 装', 'cosmetics'));
     if (this.hooks.onStartForTest) out.push(this.makeButton('开始（测试）', 'start-test', 'ghost'));
     return out;
   }
@@ -337,9 +362,64 @@ export class MenuSystem {
     const out: HTMLElement[] = [];
     out.push(this.makeButton('继续游戏', this.hooks.onResume ? 'resume' : 'continue'));
     out.push(this.makeButton('设 置', 'settings-from-pause'));
+    out.push(this.makeButton('扮 装', 'cosmetics-from-pause'));
     if (this.hooks.onRestartWorld) out.push(this.makeButton('重新开始本世界', 'restart-world', 'ghost'));
     if (this.hooks.onSaveExit) out.push(this.makeButton('保存并退出到主菜单', 'save-exit', 'ghost'));
     return out;
+  }
+
+  /** 装扮页：四个部位色板 + 预设按钮行 + 完成 */
+  private buildCosmeticsBody(): HTMLElement[] {
+    const cur = this.hooks.loadCosmetics?.() ?? { skin: '#e0b088', shirt: '#3a7bd5', pants: '#35415e', hair: '#4a3220' };
+    const wrap: HTMLElement[] = [];
+
+    for (const [part, label] of [
+      ['skin', '肤色'],
+      ['shirt', '上衣'],
+      ['pants', '裤子'],
+      ['hair', '头发'],
+    ] as const) {
+      const row = document.createElement('label');
+      row.className = 'menu-slider-row';
+      const head = document.createElement('span');
+      head.className = 'menu-slider-head';
+      const name = document.createElement('span');
+      name.className = 'menu-slider-label';
+      name.textContent = label;
+      const val = document.createElement('span');
+      val.className = 'menu-slider-value';
+      val.textContent = cur[part];
+      head.appendChild(name);
+      head.appendChild(val);
+
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.className = 'menu-color';
+      input.dataset.color = part;
+      input.value = cur[part];
+
+      row.appendChild(head);
+      row.appendChild(input);
+      wrap.push(row);
+    }
+
+    const presetRow = document.createElement('div');
+    presetRow.className = 'menu-row';
+    for (const [key, name] of [
+      ['default', '经典'],
+      ['wheat', '小麦'],
+      ['night', '暗夜'],
+      ['forest', '森语'],
+    ] as const) {
+      const b = this.makeButton(name, `preset-${key}`, 'ghost');
+      b.style.width = '72px';
+      b.style.padding = '6px 0';
+      presetRow.appendChild(b);
+    }
+    wrap.push(presetRow);
+
+    wrap.push(this.makeButton('完 成', 'done'));
+    return wrap;
   }
 
   private buildConfirmBody(): HTMLElement[] {
@@ -425,6 +505,12 @@ export class MenuSystem {
       case 'settings-from-pause':
         this.showSettings('pause');
         break;
+      case 'cosmetics':
+        this.showCosmetics('main');
+        break;
+      case 'cosmetics-from-pause':
+        this.showCosmetics('pause');
+        break;
       case 'done':
         this.backFromSettings();
         break;
@@ -443,13 +529,23 @@ export class MenuSystem {
         this.hooks.onStartForTest!(); // 仅在 buildMainButtons 渲染该按钮时可达
         break;
       default:
+        // 装扮预设按钮：data-action = "preset-<key>"
+        if (btn.dataset.action?.startsWith('preset-')) {
+          this.applyPreset(btn.dataset.action.slice('preset-'.length));
+        }
         break;
     }
   }
 
   private onInput(ev: Event): void {
     const target = ev.target as HTMLInputElement | null;
-    if (!target || target.dataset.key === undefined) return;
+    if (!target) return;
+    // 装扮色板（type=color，data-color 标识部位）
+    if (target.dataset.color !== undefined && target instanceof HTMLInputElement) {
+      this.applyColor(target.dataset.color, target.value, target);
+      return;
+    }
+    if (target.dataset.key === undefined) return;
     const spec = SLIDER_SPECS.find((s) => s.key === target.dataset.key);
     if (!spec) return;
 
@@ -470,9 +566,54 @@ export class MenuSystem {
   }
 
   private backFromSettings(): void {
-    const dest = this.settingsReturnTo === 'pause' ? 'pause' : 'main';
+    const dest = this.settingsReturnTo;
     if (dest === 'pause') this.showPause();
+    else if (dest === 'cosmetics') this.showCosmetics('main');
     else this.showMain();
+  }
+
+  /** 装扮：应用预设（展开四色到表单 + 回调） */
+  private applyPreset(key: string): void {
+    const presets: Record<string, { skin: string; shirt: string; pants: string; hair: string }> = {
+      default: { skin: '#e0b088', shirt: '#3a7bd5', pants: '#35415e', hair: '#4a3220' },
+      wheat: { skin: '#f2d5b0', shirt: '#c98f4a', pants: '#7a5c34', hair: '#d8b46a' },
+      night: { skin: '#8a5a3c', shirt: '#2c3342', pants: '#1c222e', hair: '#141414' },
+      forest: { skin: '#e8c49c', shirt: '#3f7f46', pants: '#4a3a28', hair: '#5c3a1e' },
+    };
+    const p = presets[key];
+    if (!p || this.page !== 'cosmetics') return;
+    for (const part of ['skin', 'shirt', 'pants', 'hair'] as const) {
+      const input = this.bodyEl.querySelector<HTMLInputElement>(`input[data-color="${part}"]`);
+      if (input) input.value = p[part];
+      const val = this.bodyEl.querySelector<HTMLElement>(`#menu-val-${part}`) ??
+        this.bodyEl.querySelectorAll('.menu-slider-value')[['skin', 'shirt', 'pants', 'hair'].indexOf(part)];
+      if (val) val.textContent = p[part];
+    }
+    this.hooks.onCosmeticsChange?.({ ...p, preset: key });
+  }
+
+  /** 装扮：单色变化（color input 即改即回调，preset 置 custom——不在预设表，normalize 会回落） */
+  private applyColor(part: string, value: string, input: HTMLInputElement): void {
+    if (this.page !== 'cosmetics') return;
+    if (!/#[0-9a-fA-F]{6}/.test(value)) return;
+    const cur = this.hooks.loadCosmetics?.() ?? {
+      skin: input.value,
+      shirt: input.value,
+      pants: input.value,
+      hair: input.value,
+    };
+    const next = {
+      skin: part === 'skin' ? value : cur.skin,
+      shirt: part === 'shirt' ? value : cur.shirt,
+      pants: part === 'pants' ? value : cur.pants,
+      hair: part === 'hair' ? value : cur.hair,
+      preset: 'custom',
+    };
+    // 值回显
+    const idx = ['skin', 'shirt', 'pants', 'hair'].indexOf(part);
+    const val = this.bodyEl.querySelectorAll('.menu-slider-value')[idx];
+    if (val) val.textContent = value;
+    this.hooks.onCosmeticsChange?.(next);
   }
 
   /** 从面板回到游戏：记下时间戳，让随之而来的 pointerlockchange（尚无锁定）不误触发暂停 */

@@ -47,6 +47,15 @@ export interface BusLike {
 /** 图标渲染回调：el 为格子内的 .icon 容器，stack 为 null 时应清空 */
 export type IconRenderer = (el: HTMLElement, stack: ItemStack | null) => void;
 
+/** 装备区鸭子面（survival/armor.ts 的 ArmorSlots 结构；独立声明避免 UI 耦合） */
+export interface ArmorSlotsLike {
+  head: ItemStack | null;
+  chest: ItemStack | null;
+  armorPoints(): number;
+  canPlace(slot: 'head' | 'chest', key: string): boolean;
+  put(slot: 'head' | 'chest', s: ItemStack | null): ItemStack | null;
+}
+
 export interface InventoryUIOptions {
   /** 物品 key → 中文名；缺省显示 key 本身 */
   resolver?: (key: string) => string | undefined;
@@ -54,6 +63,8 @@ export interface InventoryUIOptions {
   renderIcon?: IconRenderer;
   /** 堆叠上限查询（工具为 1）；缺省一律 64 */
   stackMaxOf?: (key: string) => number;
+  /** 装备区（可选）：注入后在面板顶部渲染 头/胸 两格装备槽 */
+  armor?: { slots: ArmorSlotsLike; onChange?: () => void };
   /** 挂载父元素；缺省 document.body */
   parent?: HTMLElement;
 }
@@ -250,6 +261,9 @@ export class InventoryUI {
   private cursor: ItemStack | null = null;
   private visible = false;
   private disposed = false;
+  /** 装备格图标/数量元素（注入 armor 选项时创建） */
+  private readonly armorTiles: Partial<Record<'head' | 'chest', { icon: HTMLElement; count: HTMLElement }>> = {};
+  private armorPtsEl: HTMLElement | null = null;
 
   constructor(inv: InventoryLike, bus: BusLike, opts: InventoryUIOptions = {}) {
     this.inv = inv;
@@ -267,6 +281,44 @@ export class InventoryUI {
     title.className = 'panel-title';
     title.textContent = '背包';
     this.root.appendChild(title);
+
+    // ---- 装备区（可选注入）：头/胸两格 + 护甲值小字 ----
+    if (opts.armor) {
+      const armorRow = document.createElement('div');
+      armorRow.id = 'inv-armor-row';
+      for (const slot of ['head', 'chest'] as const) {
+        const cell = document.createElement('div');
+        cell.className = 'slot armor-slot';
+        cell.dataset.armorSlot = slot;
+        cell.title = slot === 'head' ? '头盔位' : '胸甲位';
+        const icon = document.createElement('span');
+        icon.className = 'icon';
+        const count = document.createElement('span');
+        count.className = 'count';
+        cell.appendChild(icon);
+        cell.appendChild(count);
+        cell.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.activateArmor(slot);
+        });
+        cell.addEventListener('mouseenter', () => {
+          const s = this.opts.armor?.slots[slot];
+          if (s && this.visible) {
+            this.tooltipEl.textContent = this.nameOf(s.key);
+            this.tooltipEl.classList.remove('hidden');
+          }
+        });
+        cell.addEventListener('mouseleave', () => this.hideTooltip());
+        armorRow.appendChild(cell);
+        this.armorTiles[slot] = { icon, count };
+      }
+      const ptsLabel = document.createElement('span');
+      ptsLabel.id = 'inv-armor-points';
+      ptsLabel.className = 'armor-points';
+      armorRow.appendChild(ptsLabel);
+      this.armorPtsEl = ptsLabel;
+      this.root.appendChild(armorRow);
+    }
 
     const mainGrid = document.createElement('div');
     mainGrid.id = 'inv-main-grid';
@@ -433,6 +485,48 @@ export class InventoryUI {
       t.root.classList.toggle('active', isHotbarActive);
       t.root.classList.toggle('hotbar-cell', t.index < MAIN_START);
     }
+    this.renderArmor();
+  }
+
+  /** 装备区刷新（未注入 armor 选项时为 no-op） */
+  private renderArmor(): void {
+    if (!this.opts.armor) return;
+    for (const slot of ['head', 'chest'] as const) {
+      const tile = this.armorTiles[slot];
+      if (!tile) continue;
+      const stack = this.opts.armor.slots[slot];
+      this.iconOf(tile.icon, stack);
+      tile.count.textContent = stack && stack.count > 1 ? String(stack.count) : '';
+    }
+    if (this.armorPtsEl) this.armorPtsEl.textContent = `护甲 ${this.opts.armor.slots.armorPoints()}`;
+  }
+
+  /** 装备格点击：手空拿起旧件 / 手持适配物放入或交换 / 不适配静默拒绝 */
+  private activateArmor(slot: 'head' | 'chest'): void {
+    const armor = this.opts.armor;
+    if (!armor || !this.visible) return;
+    const slots = armor.slots;
+    const current = slots[slot];
+
+    if (!this.cursor) {
+      // 手空：拿起旧件
+      if (current) {
+        const old = slots.put(slot, null);
+        this.cursor = old;
+        armor.onChange?.();
+        this.bus.emit('invChanged', {});
+      }
+      return;
+    }
+    // 手持：仅护甲且槽位适配时放入/交换
+    if (!slots.canPlace(slot, this.cursor.key)) {
+      this.hideTooltip();
+      return;
+    }
+    const old = slots.put(slot, this.cursor);
+    this.cursor = old; // 换下的旧件上手（无旧件则手清空）
+    armor.onChange?.();
+    this.bus.emit('invChanged', {});
   }
 
   private paint(tile: TileRefs, stack: ItemStack | null): void {
@@ -528,6 +622,9 @@ function injectStyle(): void {
   box-shadow:0 10px 40px rgba(0,0,0,.5)}
 #inventory-panel.hidden{display:none}
 #inventory-panel .panel-title{font-size:14px;margin-bottom:8px;color:#cfd6e4}
+#inv-armor-row{display:flex;gap:6px;align-items:center;margin-top:4px}
+#inv-armor-row .armor-slot{border-color:rgba(160,220,160,.45)}
+#inv-armor-row .armor-points{font-size:12px;color:#9fd8a0;margin-left:6px}
 #inventory-panel .inv-grid{display:grid;gap:4px;margin-top:8px}
 #inventory-panel .main-grid{grid-template-columns:repeat(9,40px)}
 #inventory-panel .hotbar-grid{grid-template-columns:repeat(9,40px);margin-top:12px;

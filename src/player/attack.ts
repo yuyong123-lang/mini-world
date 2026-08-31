@@ -76,6 +76,36 @@ function targetBox(t: Hittable): AABBox {
 }
 
 /**
+ * 射线命中检测的共用入口（slab 法）：返回「最近的命中目标 + 进入距离」。
+ * tryAttack（近战）与 ArrowEntity（投射物）都走这里，避免双份实现漂移。
+ * @returns 无命中（全员脱靶/空表）返回 null
+ */
+export function findRayHit(
+  origin: Vec3,
+  dir: Vec3,
+  targets: readonly Hittable[],
+  maxDist: number,
+): { target: Hittable; dist: number } | null {
+  const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+  if (!(len > 1e-6)) return null;
+  const dx = dir.x / len;
+  const dy = dir.y / len;
+  const dz = dir.z / len;
+
+  let best: Hittable | null = null;
+  let bestT = Infinity;
+  for (const t of targets) {
+    if (!t || t.dead) continue;
+    const hitT = rayHitT(origin.x, origin.y, origin.z, dx, dy, dz, targetBox(t), maxDist);
+    if (hitT !== null && hitT < bestT) {
+      bestT = hitT;
+      best = t;
+    }
+  }
+  return best ? { target: best, dist: bestT } : null;
+}
+
+/**
  * slab 法射线-AABB 相交：返回进入距离 t（0 表示起点已在盒内），未相交返回 null。
  * 区间收敛于 [tEnter, tExit]，初值即攻击射程窗口 [0, ATTACK_RANGE]。
  */
@@ -111,7 +141,52 @@ function rayHitT(
 }
 
 /**
- * 尝试近战攻击：从 eyePos 沿 dir 检测最近的可打实体（射程 3 格）。
+ * 近战目标检测（含贴身兜底）：先做常规射线命中；失败时对「近距」目标做
+ * 水平锥兜底——第一人称眼睛高 1.62 格，牛/羊身高 <1，平视时射线从头顶
+ * 掠过导致 slab 不相交（贴脸/近距挥拳无效的元凶）。兜底锥：
+ * 水平距离 <2.5 且与视线水平夹角 <45°，取最近者；与玩家完全重合直接命中。
+ */
+export function findMeleeTarget(
+  origin: Vec3,
+  dir: Vec3,
+  targets: readonly Hittable[],
+  maxDist: number,
+): { target: Hittable; dist: number } | null {
+  const ray = findRayHit(origin, dir, targets, maxDist);
+  if (ray) return ray;
+
+  let best: Hittable | null = null;
+  let bestD = 2.5; // 兜底最大水平距离（近战贴身范围）
+  let sawZeroDistance = false;
+  for (const t of targets) {
+    if (!t || t.dead) continue;
+    const dx = t.pos.x - origin.x;
+    const dz = t.pos.z - origin.z;
+    const d = Math.hypot(dx, dz);
+    // 与玩家完全重合（d≈0，动物挤进玩家盒）：方向未知，视为命中
+    if (d < 1e-4) {
+      sawZeroDistance = true;
+      continue;
+    }
+    if (d > bestD) continue;
+    const flen = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+    if (!(flen > 1e-6)) continue; // 垂直向上下看时无水平分量，不兜底
+    const dot = (dx / d) * (dir.x / flen) + (dz / d) * (dir.z / flen);
+    if (dot < 0.707) continue; // 水平夹角 >45°（身后/侧后）不打
+    best = t;
+    bestD = d;
+  }
+  if (sawZeroDistance) {
+    // 重合者优先（无距离可比较）；此时 best 若也存在取更近者语义即可——重合直接返回
+    return { target: targets.find((t) => t && !t.dead && Math.hypot(t.pos.x - origin.x, t.pos.z - origin.z) < 1e-4) ?? best!, dist: 0 };
+  }
+  return best ? { target: best, dist: 0 } : null;
+}
+
+/**
+ * 尝试近战攻击：从 eyePos 沿 dir 检测最近的可打实体。
+ * maxDist 缺省为 ATTACK_RANGE(3)；调用方从渲染相机发射线时（第三人称准星对齐）
+ * 传入 ATTACK_RANGE + 相机→眼距离，保证可及深度与第一人称一致。
  *
  * @returns 是否命中了至少一个实体；true 时恰好触发一次 onHit（取射线参数 t 最小者，
  *          并列时取数组序靠前者）。targets 为空、方向为零向量、全员脱靶或已死 → false。
@@ -122,25 +197,10 @@ export function tryAttack(
   targets: readonly Hittable[],
   heldTool: ToolSpec | null | undefined,
   onHit: (e: Hittable, dmg: number) => void,
+  maxDist: number = ATTACK_RANGE,
 ): boolean {
-  const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-  if (!(len > 1e-6)) return false;
-  const dx = dir.x / len;
-  const dy = dir.y / len;
-  const dz = dir.z / len;
-
-  let best: Hittable | null = null;
-  let bestT = Infinity;
-  for (const t of targets) {
-    if (!t || t.dead) continue;
-    const hitT = rayHitT(eyePos.x, eyePos.y, eyePos.z, dx, dy, dz, targetBox(t), ATTACK_RANGE);
-    if (hitT !== null && hitT < bestT) {
-      bestT = hitT;
-      best = t;
-    }
-  }
-
-  if (!best) return false;
-  onHit(best, meleeDamage(heldTool));
+  const hit = findMeleeTarget(eyePos, dir, targets, maxDist);
+  if (!hit) return false;
+  onHit(hit.target, meleeDamage(heldTool));
   return true;
 }
