@@ -42,6 +42,29 @@ const EXPECTED_TILES: Record<string, number> = {
   crack_overlay: 34, // 契约修订：原 23..32 与 water(24) 冲突，裂纹带移至 34..43
   water: 24,
   bedrock: 33,
+  // 动物掉落扩展（分配表见 items/items.ts 顶部注释）
+  wool: 44,
+  raw_beef: 45,
+  raw_mutton: 46,
+  leather: 47,
+  raw_pork: 48,
+  // 熔炉与铁器扩展
+  iron_ingot: 49,
+  gold_ingot: 50,
+  cooked_pork: 51,
+  cooked_beef: 52,
+  cooked_mutton: 53,
+  furnace_top: 55,
+  furnace_side: 56,
+  iron_sword: 57,
+  iron_pickaxe: 58,
+  iron_axe: 59,
+  bow: 60,
+  arrow: 61,
+  leather_helmet: 62,
+  leather_chestplate: 63,
+  iron_helmet: 64,
+  iron_chestplate: 65,
 };
 
 describe('ATLAS_TILES 名称索引表', () => {

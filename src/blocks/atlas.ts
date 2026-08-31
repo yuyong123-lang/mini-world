@@ -53,6 +53,49 @@ export const ATLAS_TILES: Record<string, number> = Object.freeze({
   crack_overlay: CRACK_TILE_START,
   water: WATER_TILE,
   bedrock: 33,
+  // ---- 动物掉落扩展（W 动物波）：分配表见 items/items.ts 顶部注释 ----
+  /** 羊毛方块（三面同贴图）+ 物品图标共用 */
+  wool: 44,
+  /** 生牛肉物品图标 */
+  raw_beef: 45,
+  /** 生羊肉物品图标 */
+  raw_mutton: 46,
+  /** 皮革物品图标 */
+  leather: 47,
+  /** 生猪排物品图标（补：此前 RAW_PORK 无图标走色块） */
+  raw_pork: 48,
+  /** 铁锭物品图标 */
+  iron_ingot: 49,
+  /** 金锭物品图标 */
+  gold_ingot: 50,
+  /** 熟猪排物品图标 */
+  cooked_pork: 51,
+  /** 牛排物品图标 */
+  cooked_beef: 52,
+  /** 熟羊肉物品图标 */
+  cooked_mutton: 53,
+  /** 熔炉顶面（石面 + 排气孔） */
+  furnace_top: 55,
+  /** 熔炉侧面（石面 + 燃烧炉口） */
+  furnace_side: 56,
+  /** 铁剑物品图标 */
+  iron_sword: 57,
+  /** 铁镐物品图标 */
+  iron_pickaxe: 58,
+  /** 铁斧物品图标 */
+  iron_axe: 59,
+  /** 弓物品图标 */
+  bow: 60,
+  /** 箭物品图标 */
+  arrow: 61,
+  /** 皮革帽图标 */
+  leather_helmet: 62,
+  /** 皮革衣图标 */
+  leather_chestplate: 63,
+  /** 铁盔图标 */
+  iron_helmet: 64,
+  /** 铁胸甲图标 */
+  iron_chestplate: 65,
 });
 
 // ---------------------------------------------------------------------------
@@ -509,6 +552,250 @@ function pBedrock(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rn
   for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#66666e');
 }
 
+/** 羊毛：米白噪点 + 斜向编织暗纹（蓬松织物感） */
+function pWool(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  const pal: readonly string[] = ['#f2efe6', '#eae6da', '#faf8f0', '#e2ddce'];
+  noiseFill(ctx, x0, y0, rng, pal);
+  // 斜向编织线：两组方向相反的淡暗斜线，间隔 4px
+  for (let d = -TILE_PX; d < TILE_PX * 2; d += 4) {
+    for (let y = 0; y < TILE_PX; y++) {
+      const x = d + y;
+      if (x >= 0 && x < TILE_PX && rng() < 0.8) fillPx(ctx, x0 + x, y0 + y, '#d8d2c0');
+    }
+  }
+}
+
+/** 生肉通用绘制器：红/粉肉块 + 大理石脂肪纹 + 外圈深色描边 */
+function meatPainter(
+  body: readonly string[],
+  fat: string,
+  edge: string,
+): Painter {
+  return (ctx, x0, y0, rng) => {
+    ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+    // 排形轮廓（行宽半径，对称于 x=8）：圆角肉排
+    const profile: readonly number[] = [2, 4, 5, 6, 6, 6, 6, 6, 5, 4];
+    for (let r = 0; r < profile.length; r++) {
+      const half = profile[r];
+      const yy = 3 + r;
+      for (let x = 8 - half; x < 8 + half; x++) {
+        const isEdge = r === 0 || r === profile.length - 1 || x === 8 - half || x === 8 + half - 1;
+        let c: string;
+        if (isEdge) c = edge;
+        else if (rng() < 0.18) c = fat; // 大理石脂肪碎纹
+        else c = pick(rng, body);
+        fillPx(ctx, x0 + x, y0 + yy, c);
+      }
+    }
+    // 中央脂肪条
+    fillBox(ctx, x0 + 5, y0 + 7, 6, 1, fat);
+  };
+}
+
+/** 皮革：棕色圆角皮子 + 缝线边 + 折痕 */
+function pLeather(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  const pal: readonly string[] = ['#a5692e', '#96602a', '#b07634', '#8a5726'];
+  const profile: readonly number[] = [3, 5, 6, 6, 6, 6, 6, 5, 3];
+  for (let r = 0; r < profile.length; r++) {
+    const half = profile[r];
+    const yy = 3 + r;
+    for (let x = 8 - half; x < 8 + half; x++) {
+      const isEdge = r === 0 || r === profile.length - 1 || x === 8 - half || x === 8 + half - 1;
+      fillPx(ctx, x0 + x, y0 + yy, isEdge ? '#6e441c' : pick(rng, pal));
+    }
+  }
+  // 缝线（上缘内侧虚线）与折痕
+  for (let x = 4; x < 12; x += 2) fillPx(ctx, x0 + x, y0 + 5, '#d9b98c');
+  for (let y = 8; y < 12; y++) fillPx(ctx, x0 + 7 + ((y - 8) % 2), y0 + y, '#7a4c20');
+}
+
+/** 锭类物品图标：立体梯形锭 + 高光/暗面 */
+function ingotPainter(high: string, mid: string, shadow: string): Painter {
+  return (ctx, x0, y0) => {
+    ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+    // 顶面（平行四边形）→ 前面 → 侧面 的极简锭形
+    fillBox(ctx, x0 + 3, y0 + 6, 10, 2, high); // 顶面亮条
+    fillBox(ctx, x0 + 2, y0 + 8, 12, 4, mid); // 正面
+    fillBox(ctx, x0 + 2, y0 + 12, 12, 1, shadow); // 底棱
+    fillBox(ctx, x0 + 13, y0 + 8, 1, 4, shadow); // 右暗面
+    fillBox(ctx, x0 + 4, y0 + 9, 8, 1, high); // 正面高光线
+  };
+}
+
+/** 熟肉通用绘制器：烤棕肉排 + 深色烤痕 */
+function cookedMeatPainter(
+  body: readonly string[],
+  sear: string,
+  edge: string,
+): Painter {
+  return (ctx, x0, y0, rng) => {
+    ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+    const profile: readonly number[] = [2, 4, 5, 6, 6, 6, 6, 6, 5, 4];
+    for (let r = 0; r < profile.length; r++) {
+      const half = profile[r];
+      const yy = 3 + r;
+      for (let x = 8 - half; x < 8 + half; x++) {
+        const isEdge = r === 0 || r === profile.length - 1 || x === 8 - half || x === 8 + half - 1;
+        let c: string;
+        if (isEdge) c = edge;
+        else if (rng() < 0.16) c = sear;
+        else c = pick(rng, body);
+        fillPx(ctx, x0 + x, y0 + yy, c);
+      }
+    }
+  };
+}
+
+/** 熔炉顶面：石噪点 + 中央方形排气孔 */
+function pFurnaceTop(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_STONE);
+  // 中央 6×6 排气孔（深色内圈 + 更深的孔）
+  fillBox(ctx, x0 + 5, y0 + 5, 6, 6, '#3a3a41');
+  fillBox(ctx, x0 + 6, y0 + 6, 4, 4, '#1c1c22');
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#63636c');
+}
+
+/** 熔炉侧面：石噪点 + 底部拱形燃烧炉口 */
+function pFurnaceSide(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_STONE);
+  // 拱形炉口：8 宽 × 5 高，顶部两侧切角
+  fillBox(ctx, x0 + 4, y0 + 9, 8, 5, '#26262c');
+  fillBox(ctx, x0 + 5, y0 + 8, 6, 1, '#26262c');
+  fillBox(ctx, x0 + 3, y0 + 13, 10, 1, '#17171c'); // 门槛阴影
+  // 炉口内的余烬点缀
+  for (let i = 0; i < 4; i++) {
+    fillPx(ctx, x0 + 5 + ri(rng) % 6, y0 + 11 + (ri(rng) % 3), '#c96a1e');
+  }
+  for (let i = 0; i < 8; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#63636c');
+}
+
+/** 斜线绘制工具：从 (x,y) 起 dx/dy 步进 n 像素 */
+function stroke(
+  ctx: CanvasRenderingContext2D,
+  x0: number, y0: number,
+  x: number, y: number,
+  n: number, dx: number, dy: number, c: string,
+): void {
+  for (let i = 0; i < n; i++) {
+    fillPx(ctx, x0 + x + dx * i, y0 + y + dy * i, c);
+  }
+}
+
+/** 铁剑图标：右下→左上斜刃 + 十字护手 + 柄 */
+function pIronSword(ctx: CanvasRenderingContext2D, x0: number, y0: number): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  const blade = '#d8dde4';
+  const bladeHi = '#f2f6fa';
+  // 刃：从 (12,3) 到 (6,9) 的斜线加粗
+  for (let i = 0; i < 7; i++) {
+    fillPx(ctx, x0 + 12 - i, y0 + 3 + i, blade);
+    fillPx(ctx, x0 + 11 - i, y0 + 3 + i, bladeHi);
+  }
+  // 剑尖
+  fillPx(ctx, x0 + 13, y0 + 2, bladeHi);
+  // 十字护手：垂直于刃的反斜线
+  stroke(ctx, x0, y0, 4, 8, 9, 1, -1, '#8a6a30');
+  // 柄：左下延伸
+  stroke(ctx, x0, y0, 4, 11, 2, -1, 1, '#5c431f');
+  fillBox(ctx, x0 + 1, y0 + 12, 2, 2, '#3d2c12');
+}
+
+/** 铁镐图标：弧形镐头 + 斜柄 */
+function pIronPickaxe(ctx: CanvasRenderingContext2D, x0: number, y0: number): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  const iron = '#d8dde4';
+  const dark = '#9aa2ac';
+  // 镐头：上拱弧线（两翼下垂）
+  stroke(ctx, x0, y0, 3, 6, 4, 1, -1, iron);
+  fillPx(ctx, x0 + 7, y0 + 2, iron);
+  stroke(ctx, x0, y0, 8, 3, 4, 1, 1, iron);
+  fillPx(ctx, x0 + 2, y0 + 7, dark);
+  fillPx(ctx, x0 + 12, y0 + 7, dark);
+  // 柄：中上到右下的斜线
+  stroke(ctx, x0, y0, 7, 3, 9, 0, 1, '#8a6a30');
+  stroke(ctx, x0, y0, 8, 3, 9, 0, 1, '#6b4f24');
+}
+
+/** 铁斧图标：侧视斧刃 + 竖柄 */
+function pIronAxe(ctx: CanvasRenderingContext2D, x0: number, y0: number): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  const iron = '#d8dde4';
+  const hi = '#f2f6fa';
+  const dark = '#9aa2ac';
+  // 斧刃：左缘开口的厚楔形
+  fillBox(ctx, x0 + 4, y0 + 3, 6, 3, iron);
+  fillBox(ctx, x0 + 3, y0 + 4, 8, 4, iron);
+  fillBox(ctx, x0 + 4, y0 + 8, 6, 2, dark);
+  fillPx(ctx, x0 + 3, y0 + 5, hi);
+  fillPx(ctx, x0 + 3, y0 + 6, hi);
+  // 柄：刃右侧竖直向下
+  stroke(ctx, x0, y0, 10, 2, 11, 0, 1, '#8a6a30');
+  stroke(ctx, x0, y0, 11, 2, 11, 0, 1, '#6b4f24');
+}
+
+/** 弓图标：弧形弓身 + 弦 + 斜搭的箭 */
+function pBow(ctx: CanvasRenderingContext2D, x0: number, y0: number): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  const wood = '#8a6a30';
+  const woodDark = '#6b4f24';
+  const string = '#e8e4d8';
+  // 弓身：右侧竖向弧（三点定弧，中点右凸）
+  stroke(ctx, x0, y0, 11, 2, 1, 1, 1, wood);
+  stroke(ctx, x0, y0, 12, 3, 8, 0, 1, wood);
+  fillPx(ctx, x0 + 13, y0 + 5, woodDark);
+  fillPx(ctx, x0 + 13, y0 + 9, woodDark);
+  stroke(ctx, x0, y0, 12, 11, 1, -1, 1, wood);
+  // 弦：左凸的细线
+  stroke(ctx, x0, y0, 11, 2, 10, 0, 1, string);
+  // 搭在弦上的箭（指向右上）
+  stroke(ctx, x0, y0, 4, 8, 4, 1, -1, '#c9a15a'); // 箭杆
+  fillPx(ctx, x0 + 8, y0 + 3, '#d8dde4'); // 箭头
+  fillPx(ctx, x0 + 3, y0 + 9, '#e8e4dc'); // 尾羽
+  fillPx(ctx, x0 + 3, y0 + 8, '#f2f0ea');
+}
+
+/** 箭图标：斜置箭杆 + 石/铁头 + 尾羽 */
+function pArrow(ctx: CanvasRenderingContext2D, x0: number, y0: number): void {
+  ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+  // 箭杆：左下 → 右上
+  stroke(ctx, x0, y0, 3, 12, 9, 1, -1, '#c9a15a');
+  // 箭头：右上端
+  fillPx(ctx, x0 + 12, y0 + 3, '#d8dde4');
+  fillPx(ctx, x0 + 13, y0 + 2, '#f2f6fa');
+  fillPx(ctx, x0 + 12, y0 + 4, '#9aa2ac');
+  // 尾羽：左下端三片
+  fillPx(ctx, x0 + 2, y0 + 13, '#e8e4dc');
+  fillPx(ctx, x0 + 2, y0 + 12, '#f2f0ea');
+  fillPx(ctx, x0 + 3, y0 + 13, '#f2f0ea');
+}
+
+/** 头盔图标工厂：圆顶盔形（主色 + 暗色描边 + 面甲开口） */
+function helmetPainter(main: string, dark: string): Painter {
+  return (ctx, x0, y0) => {
+    ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+    fillBox(ctx, x0 + 3, y0 + 3, 10, 2, main); // 顶
+    fillBox(ctx, x0 + 2, y0 + 5, 12, 4, main); // 盔体
+    fillBox(ctx, x0 + 4, y0 + 9, 8, 2, dark); // 面甲开口
+    fillBox(ctx, x0 + 2, y0 + 9, 2, 2, main); // 左护耳
+    fillBox(ctx, x0 + 12, y0 + 9, 2, 2, main); // 右护耳
+    fillBox(ctx, x0 + 4, y0 + 4, 4, 1, '#ffffff55'); // 高光
+  };
+}
+
+/** 胸甲图标工厂：背心形（肩甲 + 躯干 + 中缝） */
+function chestplatePainter(main: string, dark: string): Painter {
+  return (ctx, x0, y0) => {
+    ctx.clearRect(x0, y0, TILE_PX, TILE_PX);
+    fillBox(ctx, x0 + 2, y0 + 3, 4, 3, main); // 左肩甲
+    fillBox(ctx, x0 + 10, y0 + 3, 4, 3, main); // 右肩甲
+    fillBox(ctx, x0 + 4, y0 + 4, 8, 9, main); // 躯干
+    fillBox(ctx, x0 + 7, y0 + 4, 2, 9, dark); // 中缝
+    fillBox(ctx, x0 + 5, y0 + 5, 2, 1, '#ffffff55'); // 高光
+    fillBox(ctx, x0 + 4, y0 + 12, 8, 1, dark); // 下摆
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 绘制器注册表
 // ---------------------------------------------------------------------------
@@ -539,6 +826,29 @@ const PAINTER_TABLE: PainterEntry[] = [
   { tile: 22, name: 'apple', paint: pApple },
   { tile: WATER_TILE, name: 'water', paint: pWater },
   { tile: 33, name: 'bedrock', paint: pBedrock },
+  // ---- 动物掉落扩展（44..48，分配表见 items/items.ts 顶部）----
+  { tile: 44, name: 'wool', paint: pWool },
+  { tile: 45, name: 'raw_beef', paint: meatPainter(['#b0342a', '#a02c24', '#c04338'], '#e8d8c8', '#7a1f18') },
+  { tile: 46, name: 'raw_mutton', paint: meatPainter(['#c4524a', '#b8453e', '#d06058'], '#f0e2d4', '#8e2f28') },
+  { tile: 47, name: 'leather', paint: pLeather },
+  { tile: 48, name: 'raw_pork', paint: meatPainter(['#e89aa0', '#e08a92', '#f0aab0'], '#f8ecec', '#c06a72') },
+  // ---- 熔炉与铁器扩展（49..59，分配表见 items/items.ts 顶部）----
+  { tile: 49, name: 'iron_ingot', paint: ingotPainter('#e8ecf2', '#b8c0cc', '#7e8894') },
+  { tile: 50, name: 'gold_ingot', paint: ingotPainter('#ffe98a', '#f0c232', '#b8891a') },
+  { tile: 51, name: 'cooked_pork', paint: cookedMeatPainter(['#b5704a', '#a5623c', '#c47e56'], '#8a4c2a', '#6e3a1e') },
+  { tile: 52, name: 'cooked_beef', paint: cookedMeatPainter(['#8a4a34', '#7a3e2a', '#9c5840'], '#5e2e1c', '#4a2214') },
+  { tile: 53, name: 'cooked_mutton', paint: cookedMeatPainter(['#a86248', '#98543c', '#b87054'], '#78422a', '#5c321e') },
+  { tile: 55, name: 'furnace_top', paint: pFurnaceTop },
+  { tile: 56, name: 'furnace_side', paint: pFurnaceSide },
+  { tile: 57, name: 'iron_sword', paint: pIronSword },
+  { tile: 58, name: 'iron_pickaxe', paint: pIronPickaxe },
+  { tile: 59, name: 'iron_axe', paint: pIronAxe },
+  { tile: 60, name: 'bow', paint: pBow },
+  { tile: 61, name: 'arrow', paint: pArrow },
+  { tile: 62, name: 'leather_helmet', paint: helmetPainter('#a5692e', '#6e441c') },
+  { tile: 63, name: 'leather_chestplate', paint: chestplatePainter('#a5692e', '#6e441c') },
+  { tile: 64, name: 'iron_helmet', paint: helmetPainter('#c8ced8', '#7e8894') },
+  { tile: 65, name: 'iron_chestplate', paint: chestplatePainter('#c8ced8', '#7e8894') },
 ];
 
 // 十帧裂纹（34..43，不与任何材质重叠）

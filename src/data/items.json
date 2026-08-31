@@ -15,9 +15,22 @@
   { "key": "ITEM_COAL", "name": "煤炭", "stackMax": 64, "iconTile": 17 },
   { "key": "ITEM_RAW_IRON", "name": "粗铁", "stackMax": 64, "iconTile": 18 },
   { "key": "ITEM_RAW_GOLD", "name": "粗金", "stackMax": 64, "iconTile": 19 },
+  { "key": "ITEM_IRON_INGOT", "name": "铁锭", "stackMax": 64, "iconTile": 49 },
+  { "key": "ITEM_GOLD_INGOT", "name": "金锭", "stackMax": 64, "iconTile": 50 },
+
+  { "key": "ITEM_FURNACE", "name": "熔炉", "stackMax": 64, "place": 20, "iconTile": 56 },
 
   { "key": "ITEM_APPLE", "name": "苹果", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 22 },
-  { "key": "ITEM_RAW_PORK", "name": "生猪排", "stackMax": 64, "food": { "hunger": 3 } },
+  { "key": "ITEM_RAW_PORK", "name": "生猪排", "stackMax": 64, "food": { "hunger": 3 }, "iconTile": 48 },
+
+  { "key": "ITEM_RAW_BEEF", "name": "生牛肉", "stackMax": 64, "food": { "hunger": 3 }, "iconTile": 45 },
+  { "key": "ITEM_RAW_MUTTON", "name": "生羊肉", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 46 },
+  { "key": "ITEM_LEATHER", "name": "皮革", "stackMax": 64, "iconTile": 47 },
+  { "key": "ITEM_WOOL", "name": "羊毛", "stackMax": 64, "place": 19, "iconTile": 44 },
+
+  { "key": "ITEM_COOKED_PORK", "name": "熟猪排", "stackMax": 64, "food": { "hunger": 8 }, "iconTile": 51 },
+  { "key": "ITEM_COOKED_BEEF", "name": "牛排", "stackMax": 64, "food": { "hunger": 8 }, "iconTile": 52 },
+  { "key": "ITEM_COOKED_MUTTON", "name": "熟羊肉", "stackMax": 64, "food": { "hunger": 6 }, "iconTile": 53 },
 
   { "key": "ITEM_STICK", "name": "木棍", "stackMax": 64 },
 
@@ -30,5 +43,24 @@
   { "key": "ITEM_STONE_PICKAXE", "name": "石镐", "stackMax": 1,
     "tool": { "type": "pickaxe", "tier": 2, "speedMul": 4, "damage": 3 } },
   { "key": "ITEM_STONE_SWORD", "name": "石剑", "stackMax": 1,
-    "tool": { "type": "sword", "tier": 2, "speedMul": 1, "damage": 7 } }
+    "tool": { "type": "sword", "tier": 2, "speedMul": 1, "damage": 7 } },
+  { "key": "ITEM_IRON_SWORD", "name": "铁剑", "stackMax": 1, "iconTile": 57,
+    "tool": { "type": "sword", "tier": 3, "speedMul": 1, "damage": 9 } },
+  { "key": "ITEM_IRON_PICKAXE", "name": "铁镐", "stackMax": 1, "iconTile": 58,
+    "tool": { "type": "pickaxe", "tier": 3, "speedMul": 6, "damage": 4 } },
+  { "key": "ITEM_IRON_AXE", "name": "铁斧", "stackMax": 1, "iconTile": 59,
+    "tool": { "type": "axe", "tier": 3, "speedMul": 6, "damage": 5 } },
+
+  { "key": "ITEM_BOW", "name": "弓", "stackMax": 1, "iconTile": 60,
+    "bow": { "minCharge": 0.25, "fullCharge": 1.0 } },
+  { "key": "ITEM_ARROW", "name": "箭", "stackMax": 64, "iconTile": 61 },
+
+  { "key": "ITEM_LEATHER_HELMET", "name": "皮革帽", "stackMax": 1, "iconTile": 62,
+    "armor": { "slot": "head", "points": 1 } },
+  { "key": "ITEM_LEATHER_CHESTPLATE", "name": "皮革衣", "stackMax": 1, "iconTile": 63,
+    "armor": { "slot": "chest", "points": 3 } },
+  { "key": "ITEM_IRON_HELMET", "name": "铁盔", "stackMax": 1, "iconTile": 64,
+    "armor": { "slot": "head", "points": 2 } },
+  { "key": "ITEM_IRON_CHESTPLATE", "name": "铁胸甲", "stackMax": 1, "iconTile": 65,
+    "armor": { "slot": "chest", "points": 6 } }
 ]

@@ -1,16 +1,20 @@
 // 物品定义与注册表（契约 §5）
 // 数据来自 data/items.json，模块加载时 load 一次。
 // ItemStack 规范类型复用 core/types.ts（勿另建）。
+//
+// iconTile 分配约定（与 blocks/atlas.ts ATLAS_TILES 一致，新增图标连续顺延）：
+//   44 羊毛(方块/物品共用) | 45 生牛肉 | 46 生羊肉 | 47 皮革 | 48 生猪排
+//   49 铁锭 | 50 金锭 | 51-53 熟肉 | 55-56 熔炉 | 57+ 工具/武器/护甲/弓箭
 
 import rawDefs from '../data/items.json';
 import type { ItemStack, ToolType } from '../core/types';
 
 export type { ItemStack };
 
-/** 工具属性：tier 木=1 石=2；speedMul 木×2 石×4 */
+/** 工具属性：tier 木=1 石=2 铁=3；speedMul 木×2 石×4 铁×6 */
 export interface ToolSpec {
   type: ToolType;
-  tier: 1 | 2;
+  tier: 1 | 2 | 3;
   speedMul: number;
   damage: number;
 }
@@ -27,6 +31,8 @@ export interface ItemDef {
   tool?: ToolSpec;
   /** 食用恢复饥饿值 */
   food?: { hunger: number };
+  /** 远程武器标记：持有此物品时右键为蓄力拉弓（数值走 bow.ts 常量曲线） */
+  bow?: { minCharge: number; fullCharge: number };
   /** 图集 tile 作图标；未定义则 UI 用纯色块 css 显示 */
   iconTile?: number;
 }
@@ -50,9 +56,21 @@ export const ITEMS = {
   COAL: 'ITEM_COAL',
   RAW_IRON: 'ITEM_RAW_IRON',
   RAW_GOLD: 'ITEM_RAW_GOLD',
+  IRON_INGOT: 'ITEM_IRON_INGOT',
+  GOLD_INGOT: 'ITEM_GOLD_INGOT',
+  // —— 功能方块 ——
+  BLOCK_FURNACE: 'ITEM_FURNACE',
   // —— 食物 ——
   APPLE: 'ITEM_APPLE',
   RAW_PORK: 'ITEM_RAW_PORK',
+  RAW_BEEF: 'ITEM_RAW_BEEF',
+  RAW_MUTTON: 'ITEM_RAW_MUTTON',
+  COOKED_PORK: 'ITEM_COOKED_PORK',
+  COOKED_BEEF: 'ITEM_COOKED_BEEF',
+  COOKED_MUTTON: 'ITEM_COOKED_MUTTON',
+  // —— 动物产物 / 中间材料 ——
+  LEATHER: 'ITEM_LEATHER',
+  WOOL: 'ITEM_WOOL',
   // —— 中间材料 ——
   STICK: 'ITEM_STICK',
   // —— 工具 ——
@@ -61,6 +79,17 @@ export const ITEMS = {
   WOOD_SWORD: 'ITEM_WOOD_SWORD',
   STONE_PICKAXE: 'ITEM_STONE_PICKAXE',
   STONE_SWORD: 'ITEM_STONE_SWORD',
+  IRON_SWORD: 'ITEM_IRON_SWORD',
+  IRON_PICKAXE: 'ITEM_IRON_PICKAXE',
+  IRON_AXE: 'ITEM_IRON_AXE',
+  // —— 远程武器 ——
+  BOW: 'ITEM_BOW',
+  ARROW: 'ITEM_ARROW',
+  // —— 护甲 ——
+  LEATHER_HELMET: 'ITEM_LEATHER_HELMET',
+  LEATHER_CHESTPLATE: 'ITEM_LEATHER_CHESTPLATE',
+  IRON_HELMET: 'ITEM_IRON_HELMET',
+  IRON_CHESTPLATE: 'ITEM_IRON_CHESTPLATE',
 } as const;
 
 export type ItemKey = typeof ITEMS[keyof typeof ITEMS];

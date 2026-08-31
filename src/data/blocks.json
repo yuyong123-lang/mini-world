@@ -36,5 +36,9 @@
   { "id": 17, "key": "ORE_IRON", "name": "铁矿石", "solid": true, "opaque": true,
     "tex": [18, 18, 18], "hardness": 22.5, "tool": "pickaxe", "minTier": 2, "drop": "ITEM_RAW_IRON" },
   { "id": 18, "key": "ORE_GOLD", "name": "金矿石", "solid": true, "opaque": true,
-    "tex": [19, 19, 19], "hardness": 30, "tool": "pickaxe", "minTier": 2, "drop": "ITEM_RAW_GOLD" }
+    "tex": [19, 19, 19], "hardness": 30, "tool": "pickaxe", "minTier": 3, "drop": "ITEM_RAW_GOLD" },
+  { "id": 19, "key": "WOOL", "name": "羊毛", "solid": true, "opaque": true,
+    "tex": [44, 44, 44], "hardness": 0.8, "tool": "hand", "minTier": 0, "drop": "ITEM_WOOL" },
+  { "id": 20, "key": "FURNACE", "name": "熔炉", "solid": true, "opaque": true,
+    "tex": [55, 55, 56], "hardness": 3.5, "tool": "pickaxe", "minTier": 1, "drop": "ITEM_FURNACE" }
 ]

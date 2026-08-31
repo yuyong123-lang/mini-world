@@ -19,7 +19,7 @@ export interface BlockDef {
   tex: readonly [number, number, number];
   hardness: number;
   tool?: ToolKind;
-  minTier?: 0 | 1 | 2;
+  minTier?: 0 | 1 | 2 | 3;
   drop?: string | null;
 }
 
@@ -46,6 +46,7 @@ export const BLOCK = {
   SANDSTONE: 7, LOG: 8, PLANKS: 9, LEAVES: 10, GLASS: 11, WATER: 12,
   SNOW: 13, GLOWBLOCK: 14, CRAFT_TABLE: 15,
   ORE_COAL: 16, ORE_IRON: 17, ORE_GOLD: 18,
+  WOOL: 19, FURNACE: 20,
 } as const;
 
 export const BlockRegistry = {

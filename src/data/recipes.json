@@ -46,5 +46,64 @@
     "shaped": ["C", "C", "S"],
     "map": { "C": ["ITEM_COBBLE"], "S": ["ITEM_STICK"] },
     "size": 3
+  },
+  {
+    "out": { "key": "ITEM_FURNACE", "count": 1 },
+    "shaped": ["CCC", "C.C", "CCC"],
+    "map": { "C": ["ITEM_COBBLE"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_IRON_SWORD", "count": 1 },
+    "shaped": ["I", "I", "S"],
+    "map": { "I": ["ITEM_IRON_INGOT"], "S": ["ITEM_STICK"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_IRON_PICKAXE", "count": 1 },
+    "shaped": ["III", ".S.", ".S."],
+    "map": { "I": ["ITEM_IRON_INGOT"], "S": ["ITEM_STICK"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_IRON_AXE", "count": 1 },
+    "shaped": ["II", "IS", ".S"],
+    "map": { "I": ["ITEM_IRON_INGOT"], "S": ["ITEM_STICK"] },
+    "allowMirror": true,
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_BOW", "count": 1 },
+    "shapeless": ["ITEM_STICK", "ITEM_STICK", "ITEM_STICK", "ITEM_PLANKS", "ITEM_PLANKS", "ITEM_PLANKS"],
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_ARROW", "count": 4 },
+    "shapeless": ["ITEM_IRON_INGOT", "ITEM_STICK"],
+    "size": 2
+  },
+  {
+    "out": { "key": "ITEM_LEATHER_HELMET", "count": 1 },
+    "shaped": ["LLL", "L.L"],
+    "map": { "L": ["ITEM_LEATHER"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_LEATHER_CHESTPLATE", "count": 1 },
+    "shaped": ["L.L", "LLL", "LLL"],
+    "map": { "L": ["ITEM_LEATHER"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_IRON_HELMET", "count": 1 },
+    "shaped": ["III", "I.I"],
+    "map": { "I": ["ITEM_IRON_INGOT"] },
+    "size": 3
+  },
+  {
+    "out": { "key": "ITEM_IRON_CHESTPLATE", "count": 1 },
+    "shaped": ["I.I", "III", "III"],
+    "map": { "I": ["ITEM_IRON_INGOT"] },
+    "size": 3
   }
 ]
