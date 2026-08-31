@@ -221,3 +221,96 @@ describe('T81 动物状态机', () => {
     expect(Math.abs(a.pos.z)).toBeLessThanOrEqual(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 多物种扩展：物种表 / 掉落表 / 构造选项（缺省 pig 向后兼容）
+// ---------------------------------------------------------------------------
+
+import { ANIMAL_SPECIES, cowDrops, dropsFor, sheepDrops } from '../src/entities/animals';
+
+describe('多物种掉落表', () => {
+  it('pigDrops 保持原契约：roll<0.5 得 1 块，否则 2 块', () => {
+    expect(pigDrops(0.49)).toEqual([{ key: 'ITEM_RAW_PORK', count: 1 }]);
+    expect(pigDrops(0.5)).toEqual([{ key: 'ITEM_RAW_PORK', count: 2 }]);
+  });
+
+  it('cowDrops：肉恒掉 1~2；皮革三段 <0.4 无 / <0.8 得 1 / 否则 2', () => {
+    expect(cowDrops(0.1)).toEqual([{ key: 'ITEM_RAW_BEEF', count: 1 }]); // 无皮革
+    expect(cowDrops(0.39)).toEqual([{ key: 'ITEM_RAW_BEEF', count: 1 }]); // 无皮革
+    // 0.4 皮革恰好进第二段；肉 roll>=0.5 前仍为 1
+    expect(cowDrops(0.4)).toEqual([
+      { key: 'ITEM_RAW_BEEF', count: 1 },
+      { key: 'ITEM_LEATHER', count: 1 },
+    ]);
+    expect(cowDrops(0.6)).toEqual([
+      { key: 'ITEM_RAW_BEEF', count: 2 },
+      { key: 'ITEM_LEATHER', count: 1 },
+    ]);
+    expect(cowDrops(0.8)).toEqual([
+      { key: 'ITEM_RAW_BEEF', count: 2 },
+      { key: 'ITEM_LEATHER', count: 2 },
+    ]);
+  });
+
+  it('sheepDrops：固定 羊毛1 + 生羊肉1（与 roll 无关）', () => {
+    expect(sheepDrops(0)).toEqual([
+      { key: 'ITEM_RAW_MUTTON', count: 1 },
+      { key: 'ITEM_WOOL', count: 1 },
+    ]);
+    expect(sheepDrops(0.999)).toEqual(sheepDrops(0));
+  });
+
+  it('dropsFor 按物种键转发物种表', () => {
+    expect(dropsFor('pig', 0.9)).toEqual(pigDrops(0.9));
+    expect(dropsFor('cow', 0.9)).toEqual(cowDrops(0.9));
+    expect(dropsFor('sheep', 0.9)).toEqual(sheepDrops(0.9));
+    expect(dropsFor('cow', 0.9)[0].key).toBe('ITEM_RAW_BEEF');
+  });
+});
+
+describe('多物种 Animal 构造', () => {
+  it('缺省物种 = 猪（数值与旧版一致），现有调用方不受影响', () => {
+    const { ctx } = makeCtx();
+    const a = new Animal({ x: 0, y: SURFACE, z: 0 });
+    expect(a.species).toBe(ANIMAL_SPECIES.pig);
+    expect(a.hp).toBe(10);
+    for (let i = 0; i < 30; i++) a.tick(DT, ctx);
+    expect(a.dead).toBe(false);
+  });
+
+  it('牛：maxHp 12、盒 0.8×1.0、死亡掉牛肉+皮革（rng=0.9 → 肉2+皮2）', () => {
+    const { ctx, drops } = makeCtx();
+    const cow = new Animal(
+      { x: 0, y: SURFACE, z: 0 },
+      { species: ANIMAL_SPECIES.cow, rng: () => 0.9 },
+    );
+    expect(cow.hp).toBe(12);
+    expect(cow.species.width).toBe(0.8);
+    cow.hurt(99, { x: 3, y: SURFACE, z: 0 });
+    cow.tick(DT, ctx);
+    expect(cow.dead).toBe(true);
+    const keys = drops.map((d) => d.stack.key);
+    expect(keys).toContain('ITEM_RAW_BEEF');
+    expect(keys).toContain('ITEM_LEATHER');
+    expect(drops.length).toBe(2);
+  });
+
+  it('羊：hp 8、受击后 flee 速度取物种表（2.2，远离玩家的方向）', () => {
+    // 玩家在正东 (5,0)：flee 方向应为 -X
+    const { ctx } = makeCtx({ x: 5, y: SURFACE, z: 0 });
+    const sheep = new Animal({ x: 0, y: SURFACE, z: 0 }, { species: ANIMAL_SPECIES.sheep });
+    sheep.hurt(1, { x: 5, y: SURFACE, z: 0 });
+    sheep.tick(DT, ctx);
+    expect(sheep.state).toBe('flee');
+    expect(sheep.vel.x).toBeLessThan(-2.0); // fleeSpeed=2.2 方向远离玩家
+    expect(Math.abs(sheep.vel.z)).toBeLessThan(1e-6);
+    expect(sheep.hp).toBe(8 - 1);
+  });
+
+  it('第二参直接传函数仍视为 rng（历史形态兼容）', () => {
+    const { ctx } = makeCtx();
+    const a = new Animal({ x: 0, y: SURFACE, z: 0 }, mulberry32(7));
+    for (let i = 0; i < 60; i++) a.tick(DT, ctx);
+    expect(a.dead).toBe(false);
+  });
+});

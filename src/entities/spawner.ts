@@ -18,6 +18,7 @@
 import { BLOCK } from '../blocks/registry';
 import { SEA_LEVEL } from '../core/constants';
 import type { Vec3 } from '../core/types';
+import type { AnimalSpeciesKey } from './animals';
 
 /** 相邻两次出生尝试之间的最小间隔(s)：内部 accumulator 语义 */
 export const SPAWN_ATTEMPT_INTERVAL = 0.5;
@@ -25,6 +26,12 @@ export const SPAWN_ATTEMPT_INTERVAL = 0.5;
 const CANDIDATES_PER_ATTEMPT = 8;
 /** despawn 缺省距离(m)——architecture §2.6 冻结值 */
 export const DESPAWN_DIST = 48;
+/** 动物缺省存活上限（原 20；成群刷新后上调，保证成群观感与实体量预算的平衡） */
+export const ANIMAL_CAP_DEFAULT = 24;
+/** 群成员采样偏移上限（格）：成员落在群心 ±HERD_SPREAD 的整数邻域内 */
+const HERD_SPREAD = 3;
+/** 动物物种数（等权选取） */
+const SPECIES_COUNT = 3;
 
 const TAU = Math.PI * 2;
 
@@ -40,7 +47,7 @@ export interface SpawnOpts {
    * 集成波接线建议：(x, z) => terragen.surfaceHeight(Math.floor(x), Math.floor(z)) + 1。
    */
   groundY: (x: number, z: number) => number;
-  /** 动物存活上限（architecture §2.6：20） */
+  /** 动物存活上限（缺省 24；原 §2.6 值 20 已因成群刷新上调） */
   animalCap?: number;
   /** 怪物存活上限（architecture §2.6：12） */
   monsterCap?: number;
@@ -55,6 +62,8 @@ export interface SpawnOpts {
    * 传入后完全接管动物地面过滤（如做雪原生物群系差异），海平面门槛仍然生效。
    */
   spawnAnimalOnGround?: (p: Vec3) => boolean;
+  /** 成群刷新：每群规模区间（闭区间，含端点）；缺省 [2,4] */
+  animalHerd?: [number, number];
   /** 随机源注入（默认 Math.random）；单测传 mulberry32(seed) 保证可复现 */
   rng?: () => number;
 }
@@ -79,6 +88,13 @@ export class Spawner {
   readonly animalCap: number;
   readonly monsterCap: number;
   readonly despawnDist: number;
+  /** 成群规模区间（闭区间） */
+  readonly animalHerd: [number, number];
+  /**
+   * 暂停动物刷新（main 在动物死亡时置 true，延迟数秒后置 false）——
+   * 「尸体倒地 → 别处补充」的节奏控制，避免死亡瞬间原地立即冒出新动物。
+   */
+  animalSpawnPaused = false;
 
   private readonly world: SpawnerWorld;
   private readonly groundY: (x: number, z: number) => number;
@@ -88,7 +104,7 @@ export class Spawner {
   private readonly rng: () => number;
 
   private acc = 0;
-  private animalCbs: Array<(pos: Vec3) => void> = [];
+  private animalCbs: Array<(pos: Vec3, species: AnimalSpeciesKey) => void> = [];
   private monsterCbs: Array<(pos: Vec3) => void> = [];
 
   constructor(world: SpawnerWorld, opts: SpawnOpts) {
@@ -97,16 +113,20 @@ export class Spawner {
     }
     this.world = world;
     this.groundY = opts.groundY;
-    this.animalCap = opts.animalCap ?? 20;
+    this.animalCap = opts.animalCap ?? ANIMAL_CAP_DEFAULT;
     this.monsterCap = opts.monsterCap ?? 12;
     this.despawnDist = opts.despawnDist ?? DESPAWN_DIST;
     this.animalRing = opts.animalRing ? [opts.animalRing[0], opts.animalRing[1]] : [16, 32];
     this.monsterRing = opts.monsterRing ? [opts.monsterRing[0], opts.monsterRing[1]] : [24, 40];
     this.animalGroundFn = opts.spawnAnimalOnGround ?? null;
+    this.animalHerd = opts.animalHerd
+      ? [Math.max(1, opts.animalHerd[0]), Math.max(1, opts.animalHerd[1])]
+      : [2, 4];
     this.rng = opts.rng ?? Math.random;
   }
 
-  onSpawnAnimal(cb: (pos: Vec3) => void): void {
+  /** 动物出生回调：pos 为成员出生点，species 供集成侧选择物种外观/数值 */
+  onSpawnAnimal(cb: (pos: Vec3, species: AnimalSpeciesKey) => void): void {
     this.animalCbs.push(cb);
   }
 
@@ -128,23 +148,59 @@ export class Spawner {
     else this.tryAnimals(playerPos, counts);
   }
 
-  /** 动物：仅白天；海平面之上的 GRASS 面（或自定义谓词放行） */
+  /**
+   * 动物：仅白天；海平面之上的 GRASS 面（或自定义谓词放行）。
+   * 成群刷新：首个合法点作为群心，随机选定物种后按 [animalHerd] 区间采样
+   * 邻近成员，逐个过同一套合法性校验后逐个 emit；全程受 animalCap 钳制，
+   * 至少群心 1 只成行才算本次尝试成功。
+   */
   private tryAnimals(playerPos: Vec3, counts: SpawnCounts): void {
+    if (this.animalSpawnPaused) return; // 补充延迟期间不刷（尸体倒地 → 稍后在别处补充）
     if (counts.animal >= this.animalCap) return;
     for (let i = 0; i < CANDIDATES_PER_ATTEMPT; i++) {
-      const pos = this.sampleInRing(playerPos, this.animalRing);
-      if (!pos) continue;
-      // 地表干燥度：支撑地面方块不低于海平面（terragen 只在 h>=SEA_LEVEL 才长草）
-      if (pos.y - 1 < SEA_LEVEL) continue;
-      const groundOk = this.animalGroundFn
-        ? this.animalGroundFn(pos)
-        : this.world.getBlock(pos.x, pos.y - 1, pos.z) === BLOCK.GRASS;
-      if (!groundOk) continue;
-      // 身位两格（脚 + 头）必须悬空
-      if (this.world.isSolid(pos.x, pos.y, pos.z) || this.world.isSolid(pos.x, pos.y + 1, pos.z)) continue;
-      this.emit(this.animalCbs, pos);
-      return;
+      const heart = this.sampleInRing(playerPos, this.animalRing);
+      if (!heart || !this.animalSpotOk(heart)) continue;
+
+      const species = this.pickSpecies();
+      const [hMin, hMax] = this.animalHerd;
+      const herdSize = hMin + Math.floor(this.rng() * (hMax - hMin + 1));
+
+      let emitted = 0;
+      for (let m = 0; m < herdSize && counts.animal + emitted < this.animalCap; m++) {
+        const p = m === 0 ? heart : this.sampleNear(heart);
+        if (!p || !this.animalSpotOk(p)) continue;
+        this.emitAnimal(p, species);
+        emitted++;
+      }
+      if (emitted > 0) return;
     }
+  }
+
+  /** 动物出生点合法性（群心与成员共用）：海平面之上 + 地面谓词 + 身位两格悬空 */
+  private animalSpotOk(pos: Vec3): boolean {
+    // 地表干燥度：支撑地面方块不低于海平面（terragen 只在 h>=SEA_LEVEL 才长草）
+    if (pos.y - 1 < SEA_LEVEL) return false;
+    const groundOk = this.animalGroundFn
+      ? this.animalGroundFn(pos)
+      : this.world.getBlock(pos.x, pos.y - 1, pos.z) === BLOCK.GRASS;
+    if (!groundOk) return false;
+    // 身位两格（脚 + 头）必须悬空
+    return !this.world.isSolid(pos.x, pos.y, pos.z) && !this.world.isSolid(pos.x, pos.y + 1, pos.z);
+  }
+
+  /** 物种等权选取（pig/cow/sheep 各 1/3） */
+  private pickSpecies(): AnimalSpeciesKey {
+    const r = this.rng();
+    if (r < 1 / SPECIES_COUNT) return 'pig';
+    if (r < 2 / SPECIES_COUNT) return 'cow';
+    return 'sheep';
+  }
+
+  /** 群成员采样：群心 ±HERD_SPREAD 整数偏移，y 按 groundY 重算（不做合法性判断，交给调用方） */
+  private sampleNear(heart: Vec3): Vec3 {
+    const x = Math.floor(heart.x + Math.floor(this.rng() * (2 * HERD_SPREAD + 1)) - HERD_SPREAD);
+    const z = Math.floor(heart.z + Math.floor(this.rng() * (2 * HERD_SPREAD + 1)) - HERD_SPREAD);
+    return { x, y: this.groundY(x, z), z };
   }
 
   /** 怪物：仅夜间；任意干燥可站立方块（不过滤草），脚下 solid、身位两格悬空 */
@@ -187,5 +243,10 @@ export class Spawner {
   /** 每个回调发独立克隆，防共享引用被某个监听者原地改坏 */
   private emit(cbs: Array<(pos: Vec3) => void>, pos: Vec3): void {
     for (const cb of cbs) cb({ x: pos.x, y: pos.y, z: pos.z });
+  }
+
+  /** 动物版 emit：额外携带物种键（同一群共享同一物种） */
+  private emitAnimal(pos: Vec3, species: AnimalSpeciesKey): void {
+    for (const cb of this.animalCbs) cb({ x: pos.x, y: pos.y, z: pos.z }, species);
   }
 }
