@@ -2,15 +2,19 @@
 // 在 M2 基础上接入：昼夜天空 / 生存数值 / 死亡重生 / 存读档。（任务卡 T51/T52/T71）
 
 import { BLOCK, BlockRegistry } from './blocks/registry';
+import { ITEMS } from './items/items';
 import { EventBus, type GameEvents } from './core/events';
-import { DAY_LENGTH } from './core/constants';
+import { DAY_LENGTH, chunkKey, worldToChunk } from './core/constants';
 import type { ItemStack, Vec3 } from './core/types';
 import { DropEntity } from './entities/drops';
 import type { EntityCtx } from './entities/entity';
-import { Animal } from './entities/animals';
+import { Animal, ANIMAL_SPECIES } from './entities/animals';
+import { ArrowEntity } from './entities/arrows';
+import { bowShot } from './player/bow';
 import { Monster } from './entities/monsters';
 import { Spawner, shouldDespawn } from './entities/spawner';
 import { tryAttack } from './player/attack';
+import { solidInBox } from './physics/collide';
 import { surfaceHeight } from './world/terragen';
 import { Inventory } from './items/inventory';
 import { ItemRegistry } from './items/items';
@@ -35,8 +39,15 @@ function makeBoxMesh(color: number, w: number, h: number): THREE.Mesh {
 import { SkySystem } from './render/sky';
 import { ParticleSystem, tileAverageColor } from './render/particles';
 import { createPlayerModel, type PlayerModel } from './render/playerModel';
+import { makeAtlasIconRenderer } from './render/itemIcons';
+import { syncAnimalView } from './render/creatureViews';
+import { createFirstPersonArms } from './render/firstPersonArm';
 import { initAudio, setMasterVolume, sfx } from './audio/audio';
 import { Settings, type SettingsData } from './core/settings';
+import { Cosmetics } from './core/cosmetics';
+import { FurnaceSystem } from './furnace/furnace';
+import { FurnaceUI } from './ui/furnaceUI';
+import { ArmorSlots } from './survival/armor';
 import { MenuSystem, viewDistanceToFog } from './ui/menu';
 import { clearSave, hasSave } from './save/storage';
 import { DayCycle } from './survival/daycycle';
@@ -111,12 +122,38 @@ function boot(): void {
     }
   }
 
+  // ---- 熔炉系统（状态键 "x,y,z" → 三槽 + 燃烧/进度；main 每帧 tick 持续燃烧）----
+  const furnaceSys = new FurnaceSystem();
+  // ---- 护甲装备（2 槽：头盔/胸甲；每点 -4% 怪物伤害，注入 stats 减伤）----
+  const armorSlots = new ArmorSlots();
+
   // ---- 背包 / 合成 ----
   const inv = new Inventory(36);
+  // 熔炉状态（v2 起）：读档回灌（burn/progress 原样恢复，火焰继续烧）
+  if (saved?.furnaces) {
+    for (const [key, f] of Object.entries(saved.furnaces)) {
+      const st = furnaceSys.get(key);
+      st.input = f.in ? { key: String(f.in[0]), count: Number(f.in[1]) } : null;
+      st.fuel = f.fuel ? { key: String(f.fuel[0]), count: Number(f.fuel[1]) } : null;
+      st.output = f.out ? { key: String(f.out[0]), count: Number(f.out[1]) } : null;
+      st.burnLeft = Number(f.burn);
+      st.burnTotal = Number(f.total);
+      st.progress = Number(f.progress);
+    }
+  }
   if (saved) {
     for (let i = 0; i < saved.inv.length && i < 36; i++) {
       const e = saved.inv[i];
       inv.slots[i] = e ? { key: String(e[0]), count: Number(e[1]) } : null;
+    }
+    // 装备回灌（v2 可选字段；结构在 storage 侧已收紧）
+    if (saved.armor) {
+      armorSlots.head = saved.armor.head
+        ? { key: String(saved.armor.head[0]), count: Number(saved.armor.head[1]) }
+        : null;
+      armorSlots.chest = saved.armor.chest
+        ? { key: String(saved.armor.chest[0]), count: Number(saved.armor.chest[1]) }
+        : null;
     }
   }
   // CraftingMatcher 是静态方法类——包一层实例形状适配 CraftUI 的 duck type
@@ -128,11 +165,30 @@ function boot(): void {
       } | null,
     consume: (grid: (ItemStack | null)[], recipe: Recipe) => CraftingMatcher.consume(grid, recipe),
   };
+  // 图集图标渲染器：背包/合成/热栏三处共用（iconTile 的消费方）
+  const iconRenderer = makeAtlasIconRenderer(() => {
+    const img = renderer.atlasTexture.image;
+    return img instanceof HTMLCanvasElement ? img : null;
+  });
   const hud = new Hud(app, inv);
+  hud.setIconRenderer(iconRenderer);
   const invUI = new InventoryUI(inv, bus, {
     resolver: (key) => (ItemRegistry.has(key) ? ItemRegistry.get(key).name : key),
+    renderIcon: iconRenderer,
+    armor: {
+      slots: armorSlots,
+      onChange: () => {
+        /* 换装已广播 invChanged；护甲值显示由 UI 侧刷新，无需额外处理 */
+      },
+    },
   });
-  const craftUI = new CraftUI(matcherAdapter, inv, { bus });
+  const craftUI = new CraftUI(matcherAdapter, inv, { bus, renderIcon: iconRenderer });
+  // 熔炉面板（三槽 + 火焰/进度条）；open 由右键熔炉经 interactor.onUseFurnace 触发
+  const furnaceUI = new FurnaceUI(furnaceSys, inv, {
+    bus,
+    resolver: (key) => (ItemRegistry.has(key) ? ItemRegistry.get(key).name : key),
+    renderIcon: iconRenderer,
+  });
   app.appendChild((invUI as unknown as { rootEl?: HTMLElement }).rootEl ?? new DocumentFragment());
 
   // ---- 昼夜与生存 ----
@@ -151,13 +207,29 @@ function boot(): void {
   player.hp = saved?.player.hp ?? 20;
   player.hunger = saved?.player.hunger ?? 20;
   player.spawnPoint = { ...world.spawnPoint };
-  const stats = new StatsSystem(player, bus);
+  const stats = new StatsSystem(player, bus, armorSlots);
   player.addJumpHook(() => stats.notifyJump());
 
   // ---- 玩家身体模型（第三人称可见；第一人称隐藏）----
-  const playerModel: PlayerModel = createPlayerModel();
+  // 装扮：启动时读 localStorage 四色 → 构建模型；菜单「扮 装」页即改即存
+  const cosmetics = Cosmetics.load();
+  const playerModel: PlayerModel = createPlayerModel({
+    skin: Number.parseInt(cosmetics.skin.slice(1), 16),
+    shirt: Number.parseInt(cosmetics.shirt.slice(1), 16),
+    pants: Number.parseInt(cosmetics.pants.slice(1), 16),
+    hair: Number.parseInt(cosmetics.hair.slice(1), 16),
+  });
   renderer.scene.add(playerModel.root);
   playerModel.setVisible(false);
+
+  // ---- 第一人称双臂（左右交替出拳表现）：挂在相机局部空间，装扮换色联动 ----
+  // 相机必须入场景树，其子对象（手臂）才会被渲染
+  renderer.scene.add(renderer.camera);
+  const fpArm = createFirstPersonArms({
+    skin: Number.parseInt(cosmetics.skin.slice(1), 16),
+    shirt: Number.parseInt(cosmetics.shirt.slice(1), 16),
+  });
+  renderer.camera.add(fpArm.group);
 
   // V 键切换第一/第三人称（不用 F5：那是浏览器刷新键，会重载页面丢指针锁定，
   // 用户侧表现为"突然走不了也挖不了"——已踩坑，勿改回）
@@ -165,6 +237,7 @@ function boot(): void {
     if (e.code !== 'KeyV') return;
     const mode = player.toggleViewMode();
     playerModel.setVisible(mode === 'third');
+    fpArm.group.visible = mode === 'first'; // 第一人称才显示右臂
     hud.showToast(mode === 'third' ? '第三人称视角' : '第一人称视角');
   });
 
@@ -191,6 +264,9 @@ function boot(): void {
 
   // ---- 交互 ----
   player.bind(app);
+  // 面板打开期间禁用「点击画面→锁定指针」：保证弹出框里鼠标一直可用，
+  // 选中物品/误点空白都不会被拉回游戏（退出面板走 E 键，退出即自动重锁）
+  player.pointerLockGate = () => invUI.isOpen() || craftUI.isOpen() || furnaceUI.isOpen();
   const interactor = new Interactor(renderer.camera, player, {
     getBlock: (x, y, z) => world.getBlock(x, y, z),
     isSolid: (x, y, z) => world.isSolid(x, y, z),
@@ -242,6 +318,20 @@ function boot(): void {
 
   // ---- 挖掘 / 放置接线 ----
   interactor.onBreak((pos, blockId) => {
+    // 挖掉熔炉：先把三槽内容在原地掉落（无论 toolOk 与否——内容物不该陪葬）
+    if (blockId === BLOCK.FURNACE) {
+      const key = `${pos.x},${pos.y},${pos.z}`;
+      const st = furnaceSys.take(key);
+      if (st) {
+        for (const stack of [st.input, st.fuel, st.output]) {
+          if (stack && stack.count > 0) {
+            drops.push(new DropEntity({ x: pos.x + 0.5, y: pos.y + 0.4, z: pos.z + 0.5 }, { ...stack }));
+          }
+        }
+      }
+      // 正开着的就是这个炉子 → 关面板
+      if (furnaceUI.currentKey() === key) furnaceUI.close();
+    }
     world.setBlock(pos.x, pos.y, pos.z, BLOCK.AIR);
     bus.emit('blockBroken', { pos, id: blockId });
     // 粒子：破坏瞬间迸溅 22 粒（两倍默认量，观感更爽）；中途挖掘每 0.15s 也冒 3 粒碎屑
@@ -285,6 +375,7 @@ function boot(): void {
       return;
     }
     const itemDef = ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    if (itemDef?.bow) return; // 手持弓：右键走蓄力发射，不提示「不可放置」
     if (!itemDef?.place) {
       hud.showToast('当前物品不可放置');
       return;
@@ -311,15 +402,19 @@ function boot(): void {
     bus.emit('invChanged', {});
   });
 
-  // 右键食物：吃（节流 0.5s）
+  // 右键食物：吃（节流 0.5s）。两类右键让位：①准星指着可交互方块（工作台/熔炉）
+  // ——那次右键属于「使用方块」；②手持弓——那次右键属于「蓄力拉弓」。
   let lastEatAt = 0;
   document.addEventListener('mousedown', (e) => {
     if (e.button !== 2 || !document.pointerLockElement) return;
+    const target = interactor.currentTarget();
+    if (target && (target.blockId === BLOCK.CRAFT_TABLE || target.blockId === BLOCK.FURNACE)) return;
     const nowMs = performance.now();
     if (nowMs - lastEatAt < 500) return;
     const held = inv.heldItem();
     if (!held) return;
     const itemDef = ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    if (itemDef?.bow) return; // 手持弓：右键是拉弓不是吃
     if (!itemDef?.food) return;
     lastEatAt = nowMs;
     stats.eat(itemDef.food.hunger);
@@ -330,6 +425,7 @@ function boot(): void {
 
   // 工作台右键 → 打开 3×3 合成
   interactor.onUseCraftTable(() => craftUI.open(3));
+  interactor.onUseFurnace((key) => furnaceUI.open(key));
 
   // ---- 死亡重生 ----
   let deathToastShown = false;
@@ -350,8 +446,17 @@ function boot(): void {
   // ---- E 键 / 数字键 / pointer lock 提示 ----
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'KeyE') return;
-    if (craftUI.isOpen()) { craftUI.close(); return; }
-    if (invUI.isOpen()) { invUI.close(); void document.exitPointerLock?.(); return; }
+    if (craftUI.isOpen()) {
+      craftUI.close();
+      void app.requestPointerLock?.(); // 关面板立即回游戏，无需再点一下
+      return;
+    }
+    if (furnaceUI.isOpen()) {
+      furnaceUI.close();
+      void app.requestPointerLock?.();
+      return;
+    }
+    if (invUI.isOpen()) { invUI.close(); void app.requestPointerLock?.(); return; }
     if (document.pointerLockElement) {
       invUI.open();
       void document.exitPointerLock?.();
@@ -366,8 +471,8 @@ function boot(): void {
     const lockHint = document.getElementById('lock-hint');
     if (!document.pointerLockElement) {
       // ESC 释放指针锁 → 弹暂停菜单（继续/设置/重新开始/保存退出）；
-      // 背包/合成面板开着时的解锁不算暂停（那是面板自己的解锁流程）
-      if (!invUI.isOpen() && !craftUI.isOpen()) {
+      // 背包/合成/熔炉面板开着时的解锁不算暂停（那是面板自己的解锁流程）
+      if (!invUI.isOpen() && !craftUI.isOpen() && !furnaceUI.isOpen()) {
         menu.showPause();
         return;
       }
@@ -406,6 +511,23 @@ function boot(): void {
       },
       inventorySlots: inv.slots.map((s) => (s ? { ...s } : null)),
       diffs: world.diffs,
+      furnaces: Object.fromEntries(
+        [...furnaceSys.states].map(([key, s]) => [
+          key,
+          {
+            in: s.input ? [s.input.key, s.input.count] : null,
+            fuel: s.fuel ? [s.fuel.key, s.fuel.count] : null,
+            out: s.output ? [s.output.key, s.output.count] : null,
+            burn: s.burnLeft,
+            total: s.burnTotal,
+            progress: s.progress,
+          },
+        ]),
+      ),
+      armor: {
+        head: armorSlots.head ? [armorSlots.head.key, armorSlots.head.count] : null,
+        chest: armorSlots.chest ? [armorSlots.chest.key, armorSlots.chest.count] : null,
+      },
     };
   }
 
@@ -422,11 +544,20 @@ function boot(): void {
 
   // ---- 生物系统接线（W9/M4）----
   const animals: Animal[] = [];
+  let animalRespawnTimer = 0; // 动物死亡后的补充延迟倒数（秒）
   const monsters: Monster[] = [];
   const spawner = new Spawner(world, {
-    groundY: (x, z) => surfaceHeight(x, z),
+    // groundY 约定 = 「可站立脚底 Y」：surfaceHeight 返回地表实心方块 y，需 +1
+    // （此前漏 +1 → 采样点恒嵌在草方块里被悬空校验拒绝 → 动物永不刷新）
+    groundY: (x, z) => surfaceHeight(x, z) + 1,
   });
-  spawner.onSpawnAnimal((pos) => animals.push(new Animal(pos)));
+  spawner.onSpawnAnimal((pos, speciesKey) => {
+    const a = new Animal(pos, { species: ANIMAL_SPECIES[speciesKey] });
+    // 死亡补充延迟：死后数秒内不补刷（尸体倒地 + 短暂空窗），恢复后在
+    // 环带 [16,32] 随机方向补充——新群出现在「别的地方」，不在尸体旁原地顶替
+    a.onDeath = () => { spawner.animalSpawnPaused = true; animalRespawnTimer = 5; };
+    animals.push(a);
+  });
   spawner.onSpawnMonster((pos) => {
     const m = new Monster(pos);
     // 怪物近战 → stats 统一入口（无敌帧/钳制/death 一次性全在 stats 侧）
@@ -437,26 +568,109 @@ function boot(): void {
     monsters.push(m);
   });
 
-  /** 左键攻击：准星实体命中优先于挖掘（未命中实体时 interactor 才走挖矿） */
-  let attackHeld = false;
+  /** 左键攻击：单击制（点一下打一次），准星实体命中优先于挖掘（未命中实体时 interactor 才走挖矿） */
+  let attackCooldown = 0;
+  let miningSwing = 0.3; // 挖掘挥臂节流（0.3s 一挥）
+  /** 最近被攻击命中的生物（准星下方血条数据源；until 后隐藏） */
+  let hitMob: { e: { hp: number; maxHp: number; dead: boolean }; name: string; until: number } | null = null;
+  const entityName = (e: unknown): string => {
+    const n = (e as { species?: { name?: string } }).species?.name;
+    return n ?? '怪物'; // 动物带物种名；怪物暂无名字字段，统一显示「怪物」
+  };
+  const tryMeleeAttack = (): void => {
+    if (attackCooldown > 0) return; // 攻击节奏限制（单击连点也受冷却）
+    const eye = player.eyePosition();
+    const cp = renderer.camera.position;
+    const camBack = Math.hypot(cp.x - eye.x, cp.y - eye.y, cp.z - eye.z);
+    const origin: Vec3 = { x: cp.x, y: cp.y, z: cp.z };
+    // getWorldDirection 会调 target.set()——必须传 Vector3 实例，普通对象会抛错
+    const dirV = renderer.camera.getWorldDirection(new THREE.Vector3());
+    const dir: Vec3 = { x: dirV.x, y: dirV.y, z: dirV.z };
+    const held = inv.heldItem();
+    const heldDef = held && ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    const tool = heldDef?.tool ?? null;
+    const all = [...animals, ...monsters];
+    const hit = tryAttack(origin, dir, all, tool, (e, dmg) => {
+      // onHit 只发通知；实体真实受击走 Entity.hurt（击退+无敌帧在基类）
+      (e as unknown as { hurt(d: number, from?: Vec3): void }).hurt(dmg, player.pos);
+      // 记录被打目标：准星下方显示其剩余血量（数秒内每帧刷新）
+      hitMob = { e: e as unknown as { hp: number; maxHp: number; dead: boolean }, name: entityName(e), until: performance.now() + 3000 };
+    }, 3 + camBack); // ATTACK_RANGE + 相机后撤补偿
+    if (hit) {
+      attackCooldown = 0.5;
+    }
+    // 无论命中与否都挥臂（攻击有动作反馈；挖掘的挥动在主循环按节流触发）
+    fpArm.punch();
+  };
   document.addEventListener('mousedown', (e) => {
-    if (e.button === 0 && document.pointerLockElement) attackHeld = true;
+    if (e.button === 0 && document.pointerLockElement && !(invUI.isOpen() || craftUI.isOpen() || furnaceUI.isOpen())) {
+      tryMeleeAttack();
+    }
+  });
+
+  // ---- 弓：右键按住蓄力、松开发射（蓄力曲线见 player/bow.ts）----
+  const arrows: ArrowEntity[] = [];
+  let bowChargeStart: number | null = null;
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 2 || !document.pointerLockElement) return;
+    if (bowChargeStart !== null) return;
+    const held = inv.heldItem();
+    const heldDef = held && ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    if (!heldDef?.bow) return; // 只有持弓才进入蓄力
+    bowChargeStart = performance.now();
   });
   document.addEventListener('mouseup', (e) => {
-    if (e.button === 0) attackHeld = false;
+    if (e.button !== 2 || bowChargeStart === null) return;
+    const chargeS = (performance.now() - bowChargeStart) / 1000;
+    bowChargeStart = null;
+    hud.setBowCharge(null);
+    const shot = bowShot(chargeS);
+    if (!shot) return; // 蓄力不足：哑火
+    const held = inv.heldItem();
+    const heldDef = held && ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
+    if (!heldDef?.bow) return; // 松开时已换成其他物品
+    if (!consumeOneArrow()) {
+      hud.showToast('没有箭了——木棍+铁锭可合成');
+      return;
+    }
+    const eye = player.eyePosition();
+    const dirV = renderer.camera.getWorldDirection(new THREE.Vector3());
+    arrows.push(new ArrowEntity(
+      { x: eye.x, y: eye.y, z: eye.z },
+      { x: dirV.x, y: dirV.y, z: dirV.z },
+      shot.speed,
+      shot.damage,
+    ));
+    sfx('place'); // 弦响占位音（后续可换专用合成音）
   });
-  let attackCooldown = 0;
+  /** 从背包任意槽消耗一支箭；没有返回 false */
+  function consumeOneArrow(): boolean {
+    for (let i = 0; i < inv.slots.length; i++) {
+      const s = inv.slots[i];
+      if (s && s.key === ITEMS.ARROW) {
+        inv.takeFrom(i, 1);
+        bus.emit('invChanged', {});
+        return true;
+      }
+    }
+    return false;
+  }
 
-  /** 实体死亡清理：掉落物入世界、视图回收 */
+  /** 实体死亡清理：倒地动画播完才回收视图（原实现立即回收 = 尸体瞬间消失，
+   *  且只 detachView 不 remove mesh——尸体网格泄漏在场景里永远站立）。 */
   function handleEntityDeaths(): void {
     for (const a of animals) {
-      if (!a.dead) continue;
-      a.detachView();
+      if (!a.dead || !a.deathAnimDone) continue; // 倒地动画播放中不回收
+      const v = a.detachView() as { mesh?: import('three').Object3D } | null;
+      if (v?.mesh) renderer.scene.remove(v.mesh);
     }
-    for (let i = animals.length - 1; i >= 0; i--) if (animals[i].dead) animals.splice(i, 1);
+    for (let i = animals.length - 1; i >= 0; i--) {
+      if (animals[i].dead && animals[i].deathAnimDone) animals.splice(i, 1);
+    }
     for (const m of monsters) {
       if (!m.dead) continue;
-      m.detachView();
+      const v = m.detachView() as { mesh?: import('three').Object3D } | null;
+      if (v?.mesh) renderer.scene.remove(v.mesh);
     }
     for (let i = monsters.length - 1; i >= 0; i--) if (monsters[i].dead) monsters.splice(i, 1);
   }
@@ -486,6 +700,23 @@ function boot(): void {
 
   const menu = new MenuSystem(app, {
     hasSave: () => hasSave(),
+    loadCosmetics: () => {
+      const c = Cosmetics.load();
+      return { skin: c.skin, shirt: c.shirt, pants: c.pants, hair: c.hair };
+    },
+    onCosmeticsChange: (c) => {
+      Cosmetics.save(c); // 内部 normalize（非法 hex/preset 自动回落）
+      playerModel.applyColors({
+        skin: Number.parseInt(c.skin.slice(1), 16),
+        shirt: Number.parseInt(c.shirt.slice(1), 16),
+        pants: Number.parseInt(c.pants.slice(1), 16),
+        hair: Number.parseInt(c.hair.slice(1), 16),
+      });
+      fpArm.setColors(
+        Number.parseInt(c.skin.slice(1), 16),
+        Number.parseInt(c.shirt.slice(1), 16),
+      );
+    },
     onContinue: () => {
       void app.requestPointerLock?.();
     },
@@ -529,6 +760,7 @@ function boot(): void {
   // ---- 主循环 ----
   let last = performance.now();
   let stuckFrames = 0; // 卡方块检测计数（连续 30 帧 ≈0.5s 嵌固体内触发自救）
+  let worldWaitToast = false; // 物理门控期间的「世界生成中」提示去重
   // 挖掘中途碎屑：节流发射（每 0.15s 3 粒），颜色取自最近破坏的方块
   const miningDebris = {
     color: 0x8a7a5a as number,
@@ -571,6 +803,41 @@ function boot(): void {
     if (el) el.textContent = `⚠ 主循环异常（游戏可能表现异常）\n\n${msg}`;
   }
 
+  // ---- 相机同步（第一/第三人称）----
+  // 必须在 interactor.update 之前调用：准星射线从渲染相机出发（修第三人称视差），
+  // 相机滞后一帧 = 转身瞬间目标错位。
+  function syncCamera(): void {
+    const eye = player.eyePosition();
+    const camPos = player.cameraPosition({ x: 0, y: 0, z: 0 });
+    if (player.viewMode === 'third') {
+      // 防穿墙：理想点位被体素挡住时，把相机拉近到与玩家之间不穿帮的距离
+      const dir = {
+        x: camPos.x - eye.x,
+        y: camPos.y - eye.y,
+        z: camPos.z - eye.z,
+      };
+      const len = Math.hypot(dir.x, dir.y, dir.z) || 1;
+      const step = 0.15;
+      let t = len;
+      while (t > 0) {
+        const sx = eye.x + (dir.x / len) * t;
+        const sy = eye.y + (dir.y / len) * t;
+        const sz = eye.z + (dir.z / len) * t;
+        if (!world.isSolid(Math.floor(sx), Math.floor(sy), Math.floor(sz))) break;
+        t -= step;
+      }
+      renderer.camera.position.set(
+        eye.x + (dir.x / len) * Math.max(0, t),
+        eye.y + (dir.y / len) * Math.max(0, t),
+        eye.z + (dir.z / len) * Math.max(0, t),
+      );
+    } else {
+      renderer.camera.position.set(eye.x, eye.y, eye.z);
+    }
+    // 朝向同步：yaw 绕 Y、pitch 绕 X（欧拉序 YXZ），与 controller 的 lookDir 公式一致
+    renderer.camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  }
+
   function frame(now: number): void {
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - last) / 1000);
@@ -580,7 +847,7 @@ function boot(): void {
     // 夜幕翻变沿 → dayTick 事件
     emitDayEdge();
 
-    if (invUI.isOpen() || craftUI.isOpen()) {
+    if (invUI.isOpen() || craftUI.isOpen() || furnaceUI.isOpen()) {
       guard('interactor', () => interactor.update(null, dt, null));
       // 防面板幽灵卡死：指针已重新锁定却仍有面板"开着"（状态与显示不一致的病态态）
       // ——此时玩家永久无法移动且看不到面板，症状正是"键按下但人不动"。
@@ -588,11 +855,31 @@ function boot(): void {
       if (document.pointerLockElement) {
         if (invUI.isOpen()) invUI.close();
         if (craftUI.isOpen()) craftUI.close();
+        if (furnaceUI.isOpen()) furnaceUI.close();
       }
+      // 熔炉在面板打开期间照常烧（每帧刷新界面火焰/进度）
+      guard('furnace', () => furnaceSys.tick(dt));
+      guard('furnace-ui', () => furnaceUI.refresh());
     } else {
       const preX = player.vel.x;
       const preZ = player.vel.z;
-      guard('player', () => player.tick(dt, world));
+      // ---- 物理门控：脚下 chunk 数据未就绪（worker 在途，getBlock 恒 AIR）时冻结物理。
+      // 否则出生/读档瞬间玩家会穿过尚未生成的地表掉进虚空（y<0 无地面），
+      // 坠落位置又被 autosave 固化——刷新后从虚空深处继续坠，
+      // 表现正是「键位/锁定/面板全部正常，WASD 却没反应」。
+      const footReady = world.chunks.has(
+        chunkKey(worldToChunk(player.pos.x), worldToChunk(player.pos.z)),
+      );
+      if (footReady) {
+        guard('player', () => player.tick(dt, world));
+        if (worldWaitToast) {
+          worldWaitToast = false;
+          hud.showToast('已进入世界');
+        }
+      } else if (!worldWaitToast) {
+        worldWaitToast = true;
+        hud.showToast('世界生成中…');
+      }
       // 逐帧探针：tick 是否真的执行 + 速度是否被合成（解决"键在但 vel 恒 0"的现场之谜）
       probe.frames++;
       if (probe.frames % 60 === 0) {
@@ -600,6 +887,10 @@ function boot(): void {
           `[探针] 60帧: tick跑了${probe.frames}次 | 本帧前后 vel.x ${preX.toFixed(2)}→${player.vel.x.toFixed(2)} ` +
           `vel.z ${preZ.toFixed(2)}→${player.vel.z.toFixed(2)} | keys.size=${player.debugKeyCount()}`;
       }
+      // ---- 相机同步（必须在 interactor.update 之前：准星射线从渲染相机出发，
+      //      用上一帧机位会在转身时出现目标滞后/错位）----
+      syncCamera();
+
       guard('interactor', () => interactor.update(inv.heldItem(), dt, null));
       // 挖掘中途碎屑：准星有目标且正在挖 → 周期性冒 3 粒
       miningDebris.timer += dt;
@@ -619,12 +910,33 @@ function boot(): void {
     }
 
     guard('stats', () => stats.tick(dt));
+    // 熔炉持续烧炼（面板关闭时也烧——MC 语义；面板打开分支里另有 tick+refresh）
+    if (!furnaceUI.isOpen()) guard('furnace', () => furnaceSys.tick(dt));
     guard('world', () => world.tick(player.pos));
+
+    // ---- 虚空逃逸：世界底 y<0 恒为 AIR、永无地面可落。坠毁存档（读档瞬间
+    // 物理门控尚未生效前掉下去的位置）唯一出路是送回出生点，否则每帧 vel.y
+    // 持续增大、水平操作毫无存在感——「WASD 不管用」的最终形态。
+    if (player.pos.y < -16) {
+      player.pos = { ...player.spawnPoint };
+      player.vel = { x: 0, y: 0, z: 0 };
+      hud.showToast('掉出世界——已送回出生点');
+    }
 
     // ---- 卡方块自救（每帧检查）：身体嵌在固体里且持续无法移动时，
     //      抬升到该柱最高实心面之上。覆盖「读档位置被方块埋住」「放置事故」等情形。
     //      读档校验放在这里而非启动时：启动瞬间 chunk 未加载，getBlock 全 AIR 校验无效。
-    if (world.isSolid(Math.floor(player.pos.x), Math.floor(player.pos.y + 0.9), Math.floor(player.pos.z))) {
+    //      判定必须与碰撞求解器同语义（整盒 solidInBox）：旧版只查身体中心一点，
+    //      偏心嵌入（脚部/头顶在固体、中心在空气）时碰撞侧每帧清零 vel → 永久冻结
+    //      而自救永不触发——正是「键正常、锁定正常、vel 恒 0」的冻结盲区。
+    let embeddedNow = false;
+    if (
+      (embeddedNow = solidInBox(
+        world,
+        player.pos.x - player.width / 2, player.pos.y, player.pos.z - player.width / 2,
+        player.pos.x + player.width / 2, player.pos.y + player.height, player.pos.z + player.width / 2,
+      ))
+    ) {
       stuckFrames += 1;
       if (stuckFrames > 30) {
         // 从玩家当前位置向上找第一个「脚下实心、身位两格空」的安全落脚点；
@@ -656,6 +968,11 @@ function boot(): void {
 
     // ---- 生物 tick 与清理 ----
     const isNight = daycycle.isNight;
+    // 动物死亡补充延迟倒数：归零后解除暂停，spawner 在远处环带自然补刷
+    if (animalRespawnTimer > 0) {
+      animalRespawnTimer = Math.max(0, animalRespawnTimer - dt);
+      if (animalRespawnTimer === 0) spawner.animalSpawnPaused = false;
+    }
     guard('spawner', () =>
       spawner.tick(dt, player.pos, isNight, {
         animal: animals.length,
@@ -670,23 +987,27 @@ function boot(): void {
       for (const m of monsters) m.tick(dt, { ...entityCtx, isNight });
     });
     handleEntityDeaths();
-    // 玩家攻击（左键，冷却 0.5s；准星实体命中优先于挖掘由 mousedown 路径天然保证——
-    // tryAttack 命中帧内 interactor 仍会走挖矿进度，可接受）
+    // 玩家攻击：单击制——伤害判定在 mousedown 的 tryMeleeAttack() 完成，
+    // 这里只推进冷却与挖掘挥臂动画。
     attackCooldown -= dt;
-    if (attackHeld && attackCooldown <= 0 && !(invUI.isOpen() || craftUI.isOpen())) {
-      const eye = player.eyePosition();
-      const dir: Vec3 = { x: 0, y: 0, z: 0 };
-      player.lookDir(dir);
-      const held = inv.heldItem();
-      const heldDef = held && ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
-      const tool = heldDef?.tool ?? null;
-      const all = [...animals, ...monsters];
-      const hit = tryAttack(eye, dir, all, tool, (e, dmg) => {
-        // onHit 只发通知；实体真实受击走 Entity.hurt（击退+无敌帧在基类）
-        (e as unknown as { hurt(d: number, from?: Vec3): void }).hurt(dmg, player.pos);
-      });
-      if (hit) {
-        attackCooldown = 0.5;
+    // 挖掘中途：手臂周期性挥动（0.3s 一挥，与挖掘碎屑节流节奏一致）
+    if (interactor.breakProgress() > 0.02) {
+      miningSwing += dt;
+      if (miningSwing >= 0.3) {
+        miningSwing = 0;
+        fpArm.punch();
+      }
+    } else {
+      miningSwing = 0.3; // 备满：一开挖立刻出第一拳
+    }
+    guard('fp-arm', () => fpArm.update(dt));
+    // 被击生物血条：3 秒内每帧刷新（目标死亡或超时即隐藏）
+    if (hitMob) {
+      if (hitMob.e.dead || performance.now() > hitMob.until) {
+        hitMob = null;
+        hud.setMobHealth(null);
+      } else {
+        hud.setMobHealth(hitMob.name, hitMob.e.hp, hitMob.e.maxHp);
       }
     }
 
@@ -696,42 +1017,33 @@ function boot(): void {
     });
     for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
 
+    // ---- 箭投射物 tick + 清理（命中实体/方块在 ArrowEntity.tick 内部处理）----
+    guard('arrows', () => {
+      const targets = [...animals, ...monsters];
+      for (const a of arrows) {
+        a.tick(dt, {
+          ...entityCtx,
+          targets,
+          spawnDrop: (stack, pos) => drops.push(new DropEntity({ ...pos }, stack)),
+        });
+      }
+      for (let i = arrows.length - 1; i >= 0; i--) if (arrows[i].dead) arrows.splice(i, 1);
+    });
+    guard('arrow-views', () => syncArrowViews());
+
+    // 蓄力条更新（按住右键拉弓期间）
+    if (bowChargeStart !== null) {
+      hud.setBowCharge(Math.min(1, (performance.now() - bowChargeStart) / 1000 / 1.0));
+    } else {
+      hud.setBowCharge(null);
+    }
+
     // ---- 实体视图同步与 despawn ----
     guard('entity-views', () => syncEntityViews());
     guard('cull', () => cullFarEntities());
 
     guard('particles', () => particles.update(dt));
     guard('sky', () => sky.update(dt));
-    // ---- 相机（第一/第三人称）----
-    const eye = player.eyePosition();
-    const camPos = player.cameraPosition({ x: 0, y: 0, z: 0 });
-    if (player.viewMode === 'third') {
-      // 防穿墙：理想点位被体素挡住时，把相机拉近到与玩家之间不穿帮的距离
-      const dir = {
-        x: camPos.x - eye.x,
-        y: camPos.y - eye.y,
-        z: camPos.z - eye.z,
-      };
-      const len = Math.hypot(dir.x, dir.y, dir.z) || 1;
-      const step = 0.15;
-      let t = len;
-      while (t > 0) {
-        const sx = eye.x + (dir.x / len) * t;
-        const sy = eye.y + (dir.y / len) * t;
-        const sz = eye.z + (dir.z / len) * t;
-        if (!world.isSolid(Math.floor(sx), Math.floor(sy), Math.floor(sz))) break;
-        t -= step;
-      }
-      renderer.camera.position.set(
-        eye.x + (dir.x / len) * Math.max(0, t),
-        eye.y + (dir.y / len) * Math.max(0, t),
-        eye.z + (dir.z / len) * Math.max(0, t),
-      );
-    } else {
-      renderer.camera.position.set(eye.x, eye.y, eye.z);
-    }
-    // 朝向同步：yaw 绕 Y、pitch 绕 X（欧拉序 YXZ），与 controller 的 lookDir 公式一致
-    renderer.camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
 
     // ---- 玩家模型同步（第三人称才可见）----
     if (player.viewMode === 'third') {
@@ -749,7 +1061,13 @@ function boot(): void {
       const p = player.pos;
       const v = player.vel;
       const nan = (x: number) => (Number.isFinite(x) ? x.toFixed(1) : 'NaN!');
-      const panel = craftUI.isOpen() ? `合成(${craftUI.mode()})` : invUI.isOpen() ? '背包' : '无';
+      const panel = craftUI.isOpen()
+        ? `合成(${craftUI.mode()})`
+        : furnaceUI.isOpen()
+        ? '熔炉'
+        : invUI.isOpen()
+        ? '背包'
+        : '无';
       const footChunk = world.chunks.get(
         `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`,
       );
@@ -759,7 +1077,8 @@ function boot(): void {
         `fps≈${Math.round(1 / Math.max(dt, 1e-3))} 锁定:${document.pointerLockElement ? '是' : '否'} 模式:${player.viewMode}\n` +
         `pos(${nan(p.x)},${nan(p.y)},${nan(p.z)}) vel(${nan(v.x)},${nan(v.y)},${nan(v.z)}) ` +
         `| 水中:${player.inWater ? '是' : '否'} hp:${player.hp.toFixed(0)} 饥饿:${player.hunger.toFixed(1)}\n` +
-        `区块:${world.chunks.size} 脚下:${footLoaded} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
+        `yaw:${nan(player.yaw)} dir:${player.debugMoveDir()} 嵌固:${embeddedNow ? '是' : '否'} ` +
+        `| 区块:${world.chunks.size} 脚下:${footLoaded} 掉落物:${drops.length} 生物:${animals.length + monsters.length}`;
     }
   }
   requestAnimationFrame(frame);
@@ -786,10 +1105,86 @@ function boot(): void {
     }
   }
 
-  /** 简易实体视图：彩色 box 组合（W10 可打磨），每帧同步位置与朝向 */
+  /** 实体视图：动物按物种多盒组合（猪/牛/羊），怪物保持单盒占位 */
   function syncEntityViews(): void {
-    for (const a of animals) syncView(a, 0xe8a2a8, 0.7, 0.9);
+    for (const a of animals) syncAnimalView(a, a.species, renderer.scene);
     for (const m of monsters) syncView(m, 0x3c4b3a, 0.6, 1.8);
+    syncDropViews();
+  }
+
+  /**
+   * 掉落物视图：0.28 立方小盒，颜色取物品图标的平均色（iconTile → 图集取色），
+   * 上下浮动 + 旋转。此前掉落物完全不可见（只有拾取 toast），玩家打死动物
+   * 看不到掉落物以为没掉。
+   */
+  function syncDropViews(): void {
+    const atlasCanvas = renderer.atlasTexture.image instanceof HTMLCanvasElement
+      ? renderer.atlasTexture.image
+      : null;
+    for (const d of drops) {
+      type V = { mesh: import('three').Mesh; yaw: number | null };
+      let v = d.view as V | null;
+      if (!v) {
+        // 取色失败回落暖黄（拾取物通用色）
+        let color = 0xffd75e;
+        try {
+          const def = ItemRegistry.get(d.stack.key);
+          if (def.iconTile !== undefined) {
+            color = tileAverageColor(atlasCanvas as HTMLCanvasElement, def.iconTile);
+          }
+        } catch { /* 未注册物品用回落色 */ }
+        v = {
+          mesh: makeBoxMesh(color, 0.28, 0.28),
+          yaw: null,
+        };
+        d.attachView(v);
+        renderer.scene.add(v.mesh);
+      }
+      // 浮动 + 旋转（用游戏时间驱动，各自相位按位置错开）
+      const phase = performance.now() / 1000 * 2 + d.pos.x * 1.3;
+      v.mesh.position.set(
+        d.pos.x,
+        d.pos.y + 0.05 + Math.sin(phase) * 0.06,
+        d.pos.z,
+      );
+      v.mesh.rotation.y += 0.03;
+    }
+    for (let i = drops.length - 1; i >= 0; i--) {
+      if (drops[i].dead) {
+        const v = drops[i].detachView() as { mesh: import('three').Mesh } | null;
+        if (v) renderer.scene.remove(v.mesh);
+      }
+    }
+  }
+
+  /** 箭视图：细长小杆，按飞行方向摆姿（懒建，dead 时回收） */
+  function syncArrowViews(): void {
+    for (const a of arrows) {
+      type V = { mesh: import('three').Mesh; yaw: number | null };
+      let v = a.view as V | null;
+      if (!v) {
+        v = {
+          mesh: makeBoxMesh(0xc9a15a, 0.05, 0.5),
+          yaw: null,
+        };
+        // 杆沿 +Y 建模 → 旋转到 +Z 朝向轴，与 facingYaw 约定一致
+        v.mesh.rotation.x = Math.PI / 2;
+        a.attachView(v);
+        renderer.scene.add(v.mesh);
+      }
+      v.mesh.position.set(a.pos.x, a.pos.y, a.pos.z);
+      const yaw = Math.atan2(a.vel.x, a.vel.z);
+      if (v.yaw !== yaw) {
+        v.mesh.rotation.y = yaw;
+        v.yaw = yaw;
+      }
+    }
+    for (let i = arrows.length - 1; i >= 0; i--) {
+      if (arrows[i].dead) {
+        const v = arrows[i].detachView() as { mesh: import('three').Mesh } | null;
+        if (v) renderer.scene.remove(v.mesh);
+      }
+    }
   }
 
   function syncView(
@@ -829,6 +1224,17 @@ function boot(): void {
   }
 
   console.log(`[mini-world] M3 就绪 seed=${seed} ${saved ? '(读档)' : '(新世界)'}`);
+  // 调试钩子：控制台可直查世界内部状态（诊断 HUD 之外的深挖入口）
+  (window as unknown as { __game: object }).__game = {
+    world,
+    player,
+    spawner,
+    animals,
+    monsters,
+    drops,
+    furnaceSys,
+    armorSlots,
+  };
 }
 
 /** 首次运行提示遮罩：任意键进入并请求指针锁 */
