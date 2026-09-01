@@ -96,7 +96,8 @@ npm run dev        # 打开浏览器 http://localhost:5173
 7. **游泳**：落水后自动**漂浮在水面**（不按键不下沉），空格上浮蹿跳、Shift 下潜，入水豁免摔落伤
 8. **生存**：饥饿归零掉血到 1；吃肉 / 苹果 / 区域美食回复；满饥饿自动回血；夜晚刷怪
 9. **存档**：世界改动 / 背包 / 装备 / 熔炉进度 / 所选区域每 10 秒自动保存（+ 退出时 + P 键），随时继续
-10. 摔落伤害、卡方块自救、掉出世界自动送回、防把方块放进自己身体——都替你想好了
+10. **旅行打卡**：34 省各有标志性建筑（祈年殿 / 布达拉宫 / 土楼 / 东方明珠……）稀有生成在世界中——换区域探索，集齐各地标
+11. 摔落伤害、卡方块自救、掉出世界自动送回、防把方块放进自己身体——都替你想好了
 
 ## 技术架构
 
@@ -116,7 +117,7 @@ Worker     terragen+mesher 全量入 Web Worker（transferable 零拷贝 + 三�
 熔炉       燃烧热值 + 烧炼进度（MC 语义）· 状态随存档持久化
 投射物     弓蓄力曲线 → 箭实体（重力弹道 · 子步命中 · 插墙可捡回）
 战斗       近战贴身锥形兜底 · 装备护甲减伤（每点 -4%，上限 20 点）
-美术       启动时 canvas 程序化生成 98+ tile 图集 · 物品/掉落物真实图标 · 双臂第一人称视图
+美术       启动时 canvas 程序化生成 108+ tile 图集 · 物品/掉落物真实图标 · 双臂第一人称视图
 音效       WebAudio 六音效实时合成（挖/放/受伤/吃/拾取/点击），无素材文件
 UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/熔炉/血条/蓄力条/昼夜钟/暂停菜单/装扮页/诊断 HUD
 测试       vitest 977 用例，引擎层纯函数全覆盖（含跨 chunk 结构一致性硬闸 · 34 区逐区确定性）
@@ -124,7 +125,10 @@ UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/
 
 ## 开发方式
 
-本项目采用**多 Agent 波次化并发**开发：28 张任务卡分 11 个波次，波内多 Agent 并发（文件所有权互斥 + 契约先行），波末串行集成冒烟。详见 [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md)。
+本项目采用**多 Agent 波次化并发**开发（波内多 Agent 并发：文件所有权互斥 + 契约先行，波末串行集成冒烟）：
+
+- 基础版：28 张任务卡分 11 个波次，详见 [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md)
+- **34 省扩展**：8 个波次（W0 契约波 → W1-W6 分地理组分波 → W7 终验），任务卡见 [docs/tasks/w0-contract.md](docs/tasks/w0-contract.md) ~ [w7-final.md](docs/tasks/w7-final.md)
 
 - 设计文档：[docs/architecture.md](docs/architecture.md)
 - 接口契约：[docs/contracts/interfaces.md](docs/contracts/interfaces.md)
@@ -134,7 +138,7 @@ UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/
 ## 构建与测试
 
 ```bash
-npm test        # vitest run，511 测试
+npm test        # vitest run，977 测试
 npm run build   # tsc 类型检查 + vite 生产构建（含 worker chunk）
 npm run preview # 预览生产构建
 ```
