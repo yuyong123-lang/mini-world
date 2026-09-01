@@ -100,6 +100,17 @@ async function boot(): Promise<void> {
   BlockRegistry.load();
   CraftingMatcher.load(recipesJson as never); // crafting.ts 不自动加载，boot 时显式喂入
 
+  /** 安全请求指针锁定。Chrome 在用户刚退出锁定后有 ~1s 冷却期，期间再请求会被
+   *  拒绝并抛 SecurityError（"Pointer lock cannot be acquired immediately after
+   *  the user has exited the lock"）——所有主动锁定都必须走这里，静默失败回落到
+   *  玩家点一下画面的既有行为，绝不产生未处理 Promise 异常。 */
+  const lockPointer = (): void => {
+    try {
+      const req: unknown = app.requestPointerLock?.();
+      if (req instanceof Promise) req.catch(() => { /* 冷却期/手势失效：静默 */ });
+    } catch { /* 同步抛错的老实现同样忽略 */ }
+  };
+
   // ---- 读档（若有）：seed 与初始状态来自存档；无档 → 选区流程产生新 seed ----
   // 选区流程两级：①「切换区域」菜单写入的交接键（选好了直接用，不再弹图）；
   //              ② 真正的新档 → 弹像素中国地图选区。
@@ -115,6 +126,11 @@ async function boot(): Promise<void> {
     } else {
       seed = makeSeedForRegion(await showRegionPicker(app), Math.random().toString(36).slice(2, 10));
     }
+    // 选区确认的点击本身就是用户手势 → 立即请求指针锁定，进入世界即游戏状态
+    // （若激活窗口已过期则静默失败，回落到玩家点一下画面的既有行为）
+    try {
+      lockPointer();
+    } catch { /* 锁定失败不打扰玩家 */ }
   }
 
   const renderer = new Renderer(app);
@@ -474,15 +490,15 @@ async function boot(): Promise<void> {
     if (e.code !== 'KeyE') return;
     if (craftUI.isOpen()) {
       craftUI.close();
-      void app.requestPointerLock?.(); // 关面板立即回游戏，无需再点一下
+      lockPointer(); // 关面板立即回游戏，无需再点一下
       return;
     }
     if (furnaceUI.isOpen()) {
       furnaceUI.close();
-      void app.requestPointerLock?.();
+      lockPointer();
       return;
     }
-    if (invUI.isOpen()) { invUI.close(); void app.requestPointerLock?.(); return; }
+    if (invUI.isOpen()) { invUI.close(); lockPointer(); return; }
     if (document.pointerLockElement) {
       invUI.open();
       void document.exitPointerLock?.();
@@ -757,10 +773,10 @@ async function boot(): Promise<void> {
       );
     },
     onContinue: () => {
-      void app.requestPointerLock?.();
+      lockPointer();
     },
     onResume: () => {
-      void app.requestPointerLock?.();
+      lockPointer();
     },
     onNewWorld: () => {
       clearSave();
@@ -771,7 +787,7 @@ async function boot(): Promise<void> {
     onRestartWorld: () => {
       resetRuntimeState({ resetDiffs: false, time: DAY_LENGTH * 0.5 });
       saveGame(snapshot());
-      void app.requestPointerLock?.();
+      lockPointer();
       hud.showToast('本世界已重新开始');
     },
     onSwitchRegion: () => {

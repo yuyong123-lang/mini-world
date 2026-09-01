@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { REGIONS } from '../src/data/regions';
-import { CHINA_GEO } from '../src/ui/chinaGeo';
+import { CHINA_GEO, CHINA_LABELS } from '../src/ui/chinaGeo';
 import { PICKABLE } from '../src/ui/regionPickerData';
 
 const EXPECT_34 = [
@@ -66,6 +66,22 @@ describe('CHINA_GEO 省界数据', () => {
       let pts = 0;
       for (const ring of CHINA_GEO[id]!) pts += ring.length;
       expect(pts, id).toBeGreaterThanOrEqual(floor!);
+    }
+  });
+});
+
+describe('CHINA_LABELS 省名标注锚点', () => {
+  it('34 省齐全且与 CHINA_GEO 键一致', () => {
+    expect(Object.keys(CHINA_LABELS).sort()).toEqual(Object.keys(CHINA_GEO).sort());
+  });
+
+  it('坐标有限且在中国范围内', () => {
+    for (const [id, [lon, lat]] of Object.entries(CHINA_LABELS)) {
+      expect(Number.isFinite(lon) && Number.isFinite(lat), id).toBe(true);
+      expect(lon).toBeGreaterThanOrEqual(73);
+      expect(lon).toBeLessThanOrEqual(136);
+      expect(lat).toBeGreaterThanOrEqual(18);
+      expect(lat).toBeLessThanOrEqual(54);
     }
   });
 });

@@ -5,7 +5,7 @@
 // 纯 DOM overlay + injectStyle（与 MenuSystem 同款模式）。
 
 import { REGIONS, type RegionDef, type RegionId } from '../data/regions';
-import { CHINA_GEO } from './chinaGeo';
+import { CHINA_GEO, CHINA_LABELS } from './chinaGeo';
 import { PICKABLE } from './regionPickerData';
 
 const SEA_COLOR = '#1d3a55';
@@ -44,16 +44,48 @@ const OFF_Y = (CANVAS_H - (bbox.maxY - bbox.minY) * SCALE) / 2;
 const px = (lon: number): number => (lon * rad - bbox.minX) * SCALE + OFF_X;
 const py = (lat: number): number => (bbox.maxY - mercY(lat)) * SCALE + OFF_Y;
 
-/** 每省一个 Path2D（全部环并入；构建一次，悬停重绘直接复用） */
-const PROVINCE_PATHS = new Map<RegionId, Path2D>();
-for (const [id, rings] of Object.entries(CHINA_GEO)) {
-  const path = new Path2D();
-  for (const ring of rings) {
-    path.moveTo(px(ring[0]![0]!), py(ring[0]![1]!));
-    for (let i = 1; i < ring.length; i++) path.lineTo(px(ring[i]![0]!), py(ring[i]![1]!));
-    path.closePath();
+/** 地图模型（惰性单例：Path2D/离屏 canvas 属 DOM API，模块加载必须零 DOM 保证 node 可测） */
+interface MapModel {
+  paths: Map<RegionId, Path2D>;
+  labels: Array<{ id: RegionId; x: number; y: number; w: number }>;
+  hitCtx: CanvasRenderingContext2D;
+}
+let model: MapModel | null = null;
+function getMapModel(): MapModel {
+  if (model) return model;
+  // 每省一个 Path2D（全部环并入；构建一次，悬停重绘直接复用）
+  const paths = new Map<RegionId, Path2D>();
+  for (const [id, rings] of Object.entries(CHINA_GEO)) {
+    const path = new Path2D();
+    for (const ring of rings) {
+      path.moveTo(px(ring[0]![0]!), py(ring[0]![1]!));
+      for (let i = 1; i < ring.length; i++) path.lineTo(px(ring[i]![0]!), py(ring[i]![1]!));
+      path.closePath();
+    }
+    paths.set(id as RegionId, path);
   }
-  PROVINCE_PATHS.set(id as RegionId, path);
+  // 命中检测专用上下文：保持恒等变换（与渲染 canvas 的 DPR 变换解耦，
+  // 否则 isPointInPath 的点不随 CTM 变换而 path 随——高分屏下整体错位 dpr 倍）
+  const hitCtx = document.createElement('canvas').getContext('2d')!;
+  // 省名标注：label 像素位置 + 省份像素包围盒宽（判断名字放不放得下）；大省先画
+  const labels: Array<{ id: RegionId; x: number; y: number; w: number }> = [];
+  for (const [id, rings] of Object.entries(CHINA_GEO)) {
+    const label = CHINA_LABELS[id];
+    if (!label) continue;
+    let minX = Infinity, maxX = -Infinity;
+    for (const ring of rings) {
+      for (const pt of ring) {
+        if (pt[1]! < MAIN_LAT_MIN) continue;
+        const x = px(pt[0]!);
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+    labels.push({ id: id as RegionId, x: px(label[0]), y: py(label[1]), w: maxX - minX });
+  }
+  labels.sort((a, b) => b.w - a.w);
+  model = { paths, labels, hitCtx };
+  return model;
 }
 
 /**
@@ -66,6 +98,7 @@ export function showRegionPicker(parent: HTMLElement): Promise<RegionId> {
     document.exitPointerLock?.();
   } catch { /* 未锁定时无害 */ }
   return new Promise((resolve) => {
+    const { paths, labels, hitCtx } = getMapModel();
     let selected: RegionId | null = null;
     let hovered: RegionId | null = null;
 
@@ -139,7 +172,7 @@ export function showRegionPicker(parent: HTMLElement): Promise<RegionId> {
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       // 非悬停省先画，悬停/选中最后画（提亮不被邻省覆盖）
       for (const pass of [0, 1] as const) {
-        for (const [id, path] of PROVINCE_PATHS) {
+        for (const [id, path] of paths) {
           const active = id === hovered || id === selected;
           if ((pass === 0) === active) continue;
           ctx.fillStyle = REGIONS[id]!.mapColor;
@@ -157,7 +190,26 @@ export function showRegionPicker(parent: HTMLElement): Promise<RegionId> {
       if (selected) {
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 2;
-        ctx.stroke(PROVINCE_PATHS.get(selected)!);
+        ctx.stroke(paths.get(selected)!);
+      }
+      drawLabels();
+    }
+
+    /** 省名标注：放得下才画（包围盒容得下文字）；标签锚点必须在省内；悬停/选中加粗 */
+    function drawLabels(): void {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const { id, x, y, w } of labels) {
+        const active = id === hovered || id === selected;
+        const fontSize = active ? 15 : 12;
+        ctx.font = `${active ? 'bold ' : ''}${fontSize}px sans-serif`;
+        if (ctx.measureText(REGIONS[id]!.name).width > w - 4) continue; // 小省不放名字
+        if (!hitCtx.isPointInPath(paths.get(id)!, x, y)) continue; // 锚点飘出省外则跳过
+        ctx.strokeStyle = 'rgba(8,12,20,.75)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(REGIONS[id]!.name, x, y);
+        ctx.fillStyle = active ? '#fff' : 'rgba(255,255,255,.92)';
+        ctx.fillText(REGIONS[id]!.name, x, y);
       }
     }
 
@@ -173,13 +225,13 @@ export function showRegionPicker(parent: HTMLElement): Promise<RegionId> {
       }
     }
 
-    /** 命中检测：鼠标 CSS 坐标 → 逆投问题不需要（Path2D 即像素坐标），逐省 isPointInPath */
+    /** 命中检测：鼠标 CSS 坐标 → 用无变换的 hitCtx 测试（与渲染 DPR 变换解耦，见 getMapModel 注释） */
     function pickProvince(ev: MouseEvent): RegionId | null {
       const rect = canvas.getBoundingClientRect();
       const mx = ((ev.clientX - rect.left) / rect.width) * CANVAS_W;
       const my = ((ev.clientY - rect.top) / rect.height) * CANVAS_H;
-      for (const [id, path] of PROVINCE_PATHS) {
-        if (ctx.isPointInPath(path, mx, my)) return id;
+      for (const [id, path] of paths) {
+        if (hitCtx.isPointInPath(path, mx, my)) return id;
       }
       return null;
     }
