@@ -24,7 +24,7 @@ export const mengningRegions: RegionGroup<'ningxia' | 'neimenggu'> = {
       hillsAmp: 3,
       ridgeAmp: 10, // 贺兰山脚缓岭
       tempBias: 0.1, // 西北干燥偏暖
-      desertBias: 0.3, // 沙漠边缘：只留一线沙带（腾格里东缘）
+      desertBias: -0.2, // 负值放宽沙漠阈值（terragen 语义：加在阈值上）→ 腾格里东缘一线沙带
       snowBias: 0.1,
       surface: {
         grass: { top: 'GRASS', sub: 'DIRT' },

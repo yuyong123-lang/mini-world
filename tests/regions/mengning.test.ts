@@ -164,7 +164,7 @@ describe('宁夏 ningxia（W2 定制）', () => {
     expect(def.terrain.hillsAmp).toBe(3);
     expect(def.terrain.ridgeAmp).toBe(10);
     expect(def.terrain.tempBias).toBe(0.1);
-    expect(def.terrain.desertBias).toBe(0.3); // 沙漠边缘（只留一线沙带）
+    expect(def.terrain.desertBias).toBe(-0.2); // 负值 = 放宽沙漠阈值（terragen 语义），腾格里东缘沙带
     expect(def.terrain.snowBias).toBe(0.1);
     expect(def.terrain.trees).toEqual({
       chance: 0.004,
@@ -190,7 +190,7 @@ describe('宁夏 ningxia（W2 定制）', () => {
     expect(def.animalGround).toEqual(['GRASS', 'SAND']); // 骆驼可出没于沙带
   });
 
-  it('沙漠边缘：SAND 群系可出现（desertBias 0.3 下有沙带）且草地为主', () => {
+  it('沙漠边缘：SAND 群系可现（desertBias -0.2 放宽阈值）且灌区草地仍为主', () => {
     initTerrain(makeSeedForRegion('ningxia', 't1'));
     let desert = 0;
     let grass = 0;
@@ -204,8 +204,8 @@ describe('宁夏 ningxia（W2 定制）', () => {
       }
     }
     expect(total).toBeGreaterThan(5000);
-    expect(desert).toBeGreaterThan(0); // 沙漠边缘：沙带可出现
-    expect(grass).toBeGreaterThan(desert * 20); // 灌区草地远多于沙带（塞上江南）
+    expect(desert).toBeGreaterThan(200); // 沙带真实成片（腾格里东缘）
+    expect(grass).toBeGreaterThan(desert); // 灌区草地仍多于沙带（塞上江南）
   }, 30_000);
 });
 
