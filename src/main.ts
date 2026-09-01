@@ -126,14 +126,25 @@ async function boot(): Promise<void> {
     } else {
       seed = makeSeedForRegion(await showRegionPicker(app), Math.random().toString(36).slice(2, 10));
     }
-    // 选区确认的点击本身就是用户手势 → 立即请求指针锁定，进入世界即游戏状态
-    // （若激活窗口已过期则静默失败，回落到玩家点一下画面的既有行为）
-    try {
-      lockPointer();
-    } catch { /* 锁定失败不打扰玩家 */ }
   }
 
   const renderer = new Renderer(app);
+  // 进入世界即自动锁定指针：选区/读档确认的手势窗口（transient activation ~5s）内
+  // 持续尝试——单次请求在部分浏览器/时机下会被拒绝且无报错反馈，轮询兜底直到锁定
+  // 成功或窗口过期（过期回落到玩家点一下画面的既有行为）。用户一旦主动解锁
+  // （锁定态→未锁定的变化）立即停止自动锁定，绝不把鼠标抢回去。
+  let autoLockUntil = performance.now() + 5000;
+  document.addEventListener('pointerlockchange', () => {
+    if (!document.pointerLockElement) autoLockUntil = 0;
+  });
+  lockPointer();
+  const autoLockTimer = setInterval(() => {
+    if (document.pointerLockElement || performance.now() >= autoLockUntil) {
+      clearInterval(autoLockTimer);
+      return;
+    }
+    lockPointer();
+  }, 400);
 
   // ---- 世界（流式加载中枢，terragen 在其构造器内 init）----
   const world = new World(seed);
