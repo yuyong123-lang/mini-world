@@ -41,3 +41,23 @@
 ## 7. 集成阶段职责划分
 - 并发波次只保证模块正确；main.ts 装配、系统间连线、浏览器实测一律由串行集成波完成
 - 集成波若发现并发交付缺陷：能就地修的小问题（接线遗漏/参数传递错误）可直接修；结构性缺陷记入报告回炉对应模块
+
+## 8. 34 省扩展多波并发的文件所有权（W0-W7）
+- 每个区域 agent 恰好 **3 个独占文件**：`src/data/regions/parts/<组>.ts` + `src/world/buildings/<组>.ts` + `tests/regions/<组>.test.ts`（组名对照见 contracts/buildings.md §6）
+- 聚合点 W0 一次写全：`regions/index.ts` 的 `REGIONS` spread 已含全部 14 组、内核 switch 已分发全部 50 kind → 后续波次 agent **只填自己文件里的组对象 / stamp 函数体**，绝不改 index.ts 与 structures.ts
+- `parts/<组>.ts` 导出组对象（`Partial<Record<RegionId, RegionDef>>`：地形参数/树表/结构表/动物权重/氛围色）；`buildings/<组>.ts` 导出本组 stamp 函数（签名 `(ax, az, fy, heightAt, put)`，只用 kit 工具，铁律见 contracts/buildings.md §3）
+- 波次间串行推进（W1→W6），波内 agent 并发；波内禁并行跑全量测试（Windows 负载噪声放大假超时）
+
+## 9. 冻结文件清单（W0 波末起禁改）
+以下文件 W0 完成后为冻结状态，任何波次 agent 不得修改：
+
+| 文件 | 冻结内容 |
+|---|---|
+| src/data/blocks.json / src/blocks/registry.ts / src/blocks/atlas.ts | 47 方块（id 0-46）/ BLOCK 表 / ATLAS_TILES·PAINTER_TABLE·EXPECTED_TILES 三处同步 |
+| src/world/structures.ts | 内核：锚点函数 / FOOTPRINT_R·SLOPE_TOLERANCE·KIND_SALT·FEATURE_BLOCK 四张 Record 表 / switch 分发 |
+| src/world/buildings/kit.ts、classic.ts | 公共几何工具 10 个；旧 7 stamp（几何逐字节不变） |
+| src/data/regions/index.ts | 35 个 RegionId、seed 解析、REGIONS 聚合 |
+| src/ui/regionPicker.ts | 34 色块像素图数据与模块级硬校验 |
+
+- 需要改冻结文件 → 停止，**走主线程契约修订**：报告问题 → 主线程修订 contracts/buildings.md / interfaces.md → 重发受影响任务（同 §2 契约优先流程）
+- main.ts 仅 W0-A4 可改（consumeNextRegionId 的 VALID 派生化）；README.md 仅 W7 终验可改

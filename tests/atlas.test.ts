@@ -12,7 +12,7 @@ import {
   atlasTileRng,
   tileUV,
 } from '../src/blocks/atlas';
-import { BLOCK } from '../src/blocks/registry';
+import { BLOCK, BlockRegistry } from '../src/blocks/registry';
 
 /** 任务卡冻结的名称→序号表（契约 §4 + water 24 / bedrock 33 补充） */
 const EXPECTED_TILES: Record<string, number> = {
@@ -98,6 +98,17 @@ const EXPECTED_TILES: Record<string, number> = {
   lamb_skewer: 95,
   frozen_pear: 96,
   suancai: 97,
+  // 34 省级行政区扩展（98..107 新建筑材质方块）
+  white_stone: 98,
+  red_brick: 99,
+  blue_tile: 100,
+  green_tile: 101,
+  dark_tile: 102,
+  concrete: 103,
+  glass_curtain: 104,
+  dark_wood: 105,
+  thatch: 106,
+  pastel_wall: 107,
 };
 
 describe('ATLAS_TILES 名称索引表', () => {
@@ -124,7 +135,13 @@ describe('ATLAS_TILES 名称索引表', () => {
   it('blocks.json 引用的每个 tex tile 在表中均有绘制器', () => {
     const painted = new Set(TILE_PAINTERS.map((p) => p.tile));
     // 收集 blocks.json 的全部 tex 序号：通过 registry 加载后的查表
-    const expected = new Set<number>([0, 2, 1, 3, 4, 5, 6, 8, 7, 9, 10, 11, 24, 15, 16, 12, 13, 14, 17, 18, 19, 33]);
+    const expected = new Set<number>([
+      0, 2, 1, 3, 4, 5, 6, 8, 7, 9, 10, 11, 24, 15, 16, 12, 13, 14, 17, 18, 19, 33,
+      // 中国区域扩展方块（21..36）
+      66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
+      // 34 省级行政区扩展方块（37..46）
+      98, 99, 100, 101, 102, 103, 104, 105, 106, 107,
+    ]);
     for (const t of expected) expect(painted.has(t), `缺 tile ${t} 绘制器`).toBe(true);
   });
 });
@@ -240,6 +257,19 @@ describe('ATLAS_TILES 与 BlockDef.tex 的映射一致性', () => {
     expect(CRACK_TILE_START).toBe(ATLAS_TILES.crack_overlay);
     expect(CRACK_FRAMES).toBe(10);
     expect(CRACK_TILE_START + CRACK_FRAMES - 1).toBeLessThan(ATLAS_GRID * ATLAS_GRID);
+  });
+
+  it('34 省扩展方块（37..46）三面贴图与 ATLAS_TILES 一致（98..107）', () => {
+    const keys = [
+      'WHITE_STONE', 'RED_BRICK', 'BLUE_TILE', 'GREEN_TILE', 'DARK_TILE',
+      'CONCRETE', 'GLASS_CURTAIN', 'DARK_WOOD', 'THATCH', 'PASTEL_WALL',
+    ] as const;
+    keys.forEach((key, i) => {
+      expect(BLOCK[key], key).toBe(37 + i);
+      const def = BlockRegistry.byKey(key);
+      expect([...def.tex], key).toEqual([98 + i, 98 + i, 98 + i]);
+      expect(ATLAS_TILES[key.toLowerCase()], key).toBe(98 + i);
+    });
   });
 });
 

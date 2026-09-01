@@ -50,8 +50,7 @@ import { FurnaceUI } from './ui/furnaceUI';
 import { ArmorSlots } from './survival/armor';
 import { MenuSystem, viewDistanceToFog } from './ui/menu';
 import { clearSave, hasSave } from './save/storage';
-import { currentRegion } from './data/regions';
-import { makeSeedForRegion } from './data/regions';
+import { currentRegion, makeSeedForRegion, REGIONS } from './data/regions';
 import { showRegionPicker } from './ui/regionPicker';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
@@ -1305,10 +1304,10 @@ function consumeNextRegionId(): import('./data/regions').RegionId | null {
   try {
     localStorage.removeItem(KEY);
   } catch { /* 删不掉也无妨：下次读档流程会覆盖 */ }
-  // 非法值一律回落 null（regionIdFromSeed 同款防御；这里手写避免 import REGIONS 表）
-  const VALID: ReadonlySet<string> = new Set([
-    'sichuan', 'beijing', 'yunnan', 'neimenggu', 'xinjiang', 'dongbei',
-  ]);
+  // 非法值一律回落 null（regionIdFromSeed 同款防御）。合法集派生自 REGIONS
+  // 键（36 = generic + dongbei + 34 省级行政区），W0e 起不再手写——
+  // 新增区域只改 regions 表即可被「切换区域」交接接受。
+  const VALID: ReadonlySet<string> = new Set(Object.keys(REGIONS));
   return VALID.has(raw) ? (raw as import('./data/regions').RegionId) : null;
 }
 

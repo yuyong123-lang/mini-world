@@ -129,6 +129,17 @@ export const ATLAS_TILES: Record<string, number> = Object.freeze({
   lamb_skewer: 95,
   frozen_pear: 96,
   suancai: 97,
+  // ---- 34 省级行政区扩展（98..107 新建筑材质方块）----
+  white_stone: 98,
+  red_brick: 99,
+  blue_tile: 100,
+  green_tile: 101,
+  dark_tile: 102,
+  concrete: 103,
+  glass_curtain: 104,
+  dark_wood: 105,
+  thatch: 106,
+  pastel_wall: 107,
 });
 
 // ---------------------------------------------------------------------------
@@ -987,6 +998,150 @@ function pIce(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): 
   }
 }
 
+// ---- 34 省级行政区扩展绘制器（98..107 新建筑材质方块）----
+
+const PAL_WHITE_STONE: readonly string[] = ['#f2efe6', '#eae6da', '#f8f5ec', '#e2ddcf'];
+const PAL_RED_BRICK: readonly string[] = ['#9c4a32', '#8e4028', '#aa563a', '#833a24'];
+const PAL_TILE_BLUE: readonly string[] = ['#2a5aa8', '#245098', '#3468bc', '#1e4688'];
+const PAL_TILE_GREEN: readonly string[] = ['#2e8a4a', '#267a3e', '#3a9a58', '#1f6a34'];
+const PAL_TILE_DARK: readonly string[] = ['#3c424c', '#343a44', '#454c58', '#2c323c'];
+const PAL_CONCRETE: readonly string[] = ['#a8a8a2', '#9e9e98', '#b2b2ac', '#94948e'];
+const PAL_DARK_WOOD: readonly string[] = ['#5a3a22', '#4e3018', '#66422a', '#442a14'];
+const PAL_THATCH: readonly string[] = ['#c8a850', '#b89840', '#d8b860', '#a88830'];
+const PAL_PASTEL: readonly string[] = ['#f2e2ce', '#eedac4', '#f8ead8', '#e8d2ba'];
+const PAL_CURTAIN_GLASS: readonly string[] = ['#1c2a44', '#182540', '#223050', '#141e34'];
+
+/** 汉白玉：米白底 + 斜向大理石细纹 + 浅灰石斑 */
+function pWhiteStone(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_WHITE_STONE);
+  // 两条斜向下行的大理石细纹（主纹深一线、伴纹浅一线）
+  for (let k = 0; k < 2; k++) {
+    let x = Math.floor(rng() * 5);
+    let y = Math.floor(rng() * 3);
+    for (let i = 0; i < 15; i++) {
+      if (x < 0 || x > 15 || y > 15) break;
+      fillPx(ctx, x0 + x, y0 + y, '#d6cfbf');
+      if (rng() < 0.5) fillPx(ctx, x0 + x, y0 + Math.min(15, y + 1), '#e4decf');
+      x += rng() < 0.7 ? 1 : 0;
+      y += 1;
+    }
+  }
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#dcd5c4');
+  for (let i = 0; i < 4; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#fffdf4');
+}
+
+/** 红砖：红棕砖体 + 浅灰砖缝交错（同 pGreyBrick 的砌法，换红棕调） */
+function pRedBrick(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_RED_BRICK);
+  for (const y of [3, 7, 11, 15]) fillBox(ctx, x0, y0 + y, TILE_PX, 1, '#d8d0c0');
+  for (let row = 0; row < 4; row++) {
+    const off = row % 2 === 0 ? 3 : 11;
+    for (let y = row * 4; y < row * 4 + 3; y++) fillPx(ctx, x0 + off, y0 + y, '#d8d0c0');
+  }
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#c06a4a');
+  for (let i = 0; i < 4; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#742e1c');
+}
+
+/** 琉璃瓦通用（参照 pYellowTile）：底色瓦垄（暗/亮交替竖条）+ 底缘搭接暗缝 + 零散高光 */
+function glazeTilePainter(
+  pal: readonly string[],
+  hi: string,
+  lo: string,
+  seam: string,
+): Painter {
+  return (ctx, x0, y0, rng) => {
+    noiseFill(ctx, x0, y0, rng, pal);
+    for (let x = 0; x < TILE_PX; x++) {
+      const shade = x % 4 === 0 ? lo : x % 4 === 2 ? hi : null;
+      if (shade) for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, shade);
+    }
+    fillBox(ctx, x0, y0 + 15, TILE_PX, 1, seam);
+    for (let i = 0; i < 4; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), hi);
+  };
+}
+
+/** 黛瓦：深灰近黑瓦垄 + 冷灰高光 + 两道搭接横缝（pGreyTile 的变深版） */
+function pDarkTile(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_TILE_DARK);
+  for (let x = 0; x < TILE_PX; x++) {
+    const shade = x % 4 === 0 ? '#242932' : x % 4 === 2 ? '#707a86' : null;
+    if (shade) for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, shade);
+  }
+  fillBox(ctx, x0, y0 + 7, TILE_PX, 1, '#1c212a');
+  fillBox(ctx, x0, y0 + 15, TILE_PX, 1, '#1c212a');
+}
+
+/** 混凝土：中性灰细骨料噪点 + 1~2 个气泡孔（孔缘带一点亮边） */
+function pConcrete(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_CONCRETE);
+  for (let i = 0; i < 10; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#868680');
+  for (let i = 0; i < 5; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#c4c4be');
+  const holes = 1 + Math.floor(rng() * 2);
+  for (let k = 0; k < holes; k++) {
+    const hx = 1 + Math.floor(rng() * 13);
+    const hy = 1 + Math.floor(rng() * 13);
+    fillPx(ctx, x0 + hx, y0 + hy, '#74746e');
+    fillPx(ctx, x0 + hx + 1, y0 + hy, '#6e6e68');
+    fillPx(ctx, x0 + hx, y0 + hy + 1, '#6e6e68');
+    fillPx(ctx, x0 + hx + 1, y0 + hy + 1, '#8e8e88');
+  }
+}
+
+/** 幕墙玻璃：深蓝黑玻璃底 + 亮蓝窗格网格 + 斜向天光反射（不透底，避免黑格渲染） */
+function pGlassCurtain(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_CURTAIN_GLASS);
+  for (const k of [0, 5, 10, 15]) {
+    fillBox(ctx, x0 + k, y0, 1, TILE_PX, '#4c88cc'); // 竖窗格线
+    fillBox(ctx, x0, y0 + k, TILE_PX, 1, '#4c88cc'); // 横窗格线
+  }
+  for (let i = 0; i < 5; i++) fillPx(ctx, x0 + 2 + i, y0 + 2 + i, 'hsla(205,80%,70%,0.6)');
+  for (let i = 0; i < 3; i++) fillPx(ctx, x0 + 11 + i, y0 + 3 + i, 'hsla(205,80%,70%,0.4)');
+  for (let i = 0; i < 4; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#2c3e60');
+}
+
+/** 深色木：深褐竖纹列 + 深色竖沟 + 纤维亮点 + 节疤（pLogSide 的深色变体） */
+function pDarkWood(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  for (let x = 0; x < TILE_PX; x++) {
+    const tone = pick(rng, PAL_DARK_WOOD); // 每列一种基色 → 竖条纹
+    for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, rng() < 0.06 ? '#7a5232' : tone);
+  }
+  for (let x = 2; x < TILE_PX; x += 5) {
+    for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, '#32200e');
+  }
+  const kx = 2 + (ri(rng) % 12);
+  const ky = 2 + (ri(rng) % 11);
+  fillBox(ctx, x0 + kx, y0 + ky, 2, 3, '#281808');
+}
+
+/** 茅草：枯黄草茎层叠 + 深黄短横线随机 + 亮草茎 */
+function pThatch(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_THATCH);
+  for (let y = 0; y < TILE_PX; y += 3) {
+    let x = Math.floor(rng() * 4);
+    while (x < TILE_PX) {
+      const len = 2 + Math.floor(rng() * 3);
+      const c = rng() < 0.5 ? '#8a6a20' : '#9c7c28';
+      for (let i = 0; i < len && x + i < TILE_PX; i++) fillPx(ctx, x0 + x + i, y0 + y, c);
+      x += len + 2 + Math.floor(rng() * 2);
+    }
+  }
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#e8cc78');
+  for (let i = 0; i < 4; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#785c18');
+}
+
+/** 粉彩墙：奶油黄/淡粉柔和底 + 低频粉晕斑 + 细腻噪点（葡式小楼抹灰墙） */
+function pPastelWall(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_PASTEL);
+  const blobs = 1 + Math.floor(rng() * 2);
+  for (let k = 0; k < blobs; k++) {
+    const cx = 2 + (ri(rng) % 12);
+    const cy = 2 + (ri(rng) % 12);
+    paintBlob(ctx, x0 + cx, y0 + cy, 2, () => (rng() < 0.5 ? '#f6d8c8' : '#f0d0be'));
+  }
+  for (let i = 0; i < 7; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#fbf0e2');
+  for (let i = 0; i < 5; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#e2c4aa');
+}
+
 // ---- 区域物品图标（82..97）----
 
 /** 竹笋：宝塔形三层锥体 */
@@ -1234,6 +1389,17 @@ const PAINTER_TABLE: PainterEntry[] = [
   { tile: 95, name: 'lamb_skewer', paint: pLambSkewer },
   { tile: 96, name: 'frozen_pear', paint: pFrozenPear },
   { tile: 97, name: 'suancai', paint: pSuancai },
+  // ---- 34 省级行政区扩展（98..107 新建筑材质方块）----
+  { tile: 98, name: 'white_stone', paint: pWhiteStone },
+  { tile: 99, name: 'red_brick', paint: pRedBrick },
+  { tile: 100, name: 'blue_tile', paint: glazeTilePainter(PAL_TILE_BLUE, '#5c8ce0', '#1a3a78', '#142c58') },
+  { tile: 101, name: 'green_tile', paint: glazeTilePainter(PAL_TILE_GREEN, '#68c880', '#1a5c30', '#144a26') },
+  { tile: 102, name: 'dark_tile', paint: pDarkTile },
+  { tile: 103, name: 'concrete', paint: pConcrete },
+  { tile: 104, name: 'glass_curtain', paint: pGlassCurtain },
+  { tile: 105, name: 'dark_wood', paint: pDarkWood },
+  { tile: 106, name: 'thatch', paint: pThatch },
+  { tile: 107, name: 'pastel_wall', paint: pPastelWall },
 ];
 
 // 十帧裂纹（34..43，不与任何材质重叠）

@@ -134,3 +134,89 @@ interface SaveGame {
 4. 怪物穿墙 → 强制共用 collide.ts 求解器
 5. localStorage 写爆 → diff-only 几 KB~几十 KB；try/catch QuotaExceeded 提示；留 IndexedDB 升级口
 6. Pointer Lock 怪癖 → 点击手势触发进入；ESC 后显式「继续游戏」按钮恢复
+
+## 6. 34 省级行政区扩展（W0-W7）
+
+> 计划全文见 `~/.claude/plans/rippling-swimming-conway.md`；拆分契约见 [contracts/buildings.md](contracts/buildings.md)。
+
+总览：RegionId 7→35（generic + 34 省级行政区，东北拆三省）、StructureKind 7→50（43 个新 stamp）、新方块 10 个（id 37-46，全 `drop:null`）、选区像素图 34 色块（区域码 `'2'..'9'+'a'..'z'`）。植被复用 8 种 TreeKind、动物只用 9 物种改权重，**不含新美食/新物品**。
+
+### 6.1 目录结构
+
+```
+src/data/regions/
+  index.ts        # 全部类型 + seed 解析 + 活动区域状态 + REGIONS 聚合（14 组 spread 一次写全，W0 后冻结）
+  parts/legacy.ts # generic + 旧 6 区（逐字冻结）
+  parts/<组>.ts   # 14 组，各组导出自己的 RegionDef 组对象（Partial<Record<RegionId, RegionDef>>）
+src/world/
+  structures.ts   # 内核：锚点/校验/四张 Record 表（FOOTPRINT_R/SLOPE_TOLERANCE/KIND_SALT/FEATURE_BLOCK）/switch 分发（W0 后冻结）
+  buildings/
+    kit.ts        # 公共几何工具 10 个（W0 后冻结）
+    classic.ts    # 旧 7 stamp 纯搬家（几何逐字节不变）
+    <组>.ts ×14   # 43 个新 stamp 按地理分组
+tests/regions/<组>.test.ts  # 每组一个测试文件（并发所有权单位）
+tests/regionPicker.test.ts  # 像素图纯数据校验
+```
+
+### 6.2 种子兼容策略
+
+- seed 前缀 `cn_<regionId>_<rand>` 与解析不变，34 个新 id 直接作为 `<regionId>` 段
+- **legacy 冻结**：generic + 旧 6 区（含 dongbei）RegionDef 逐字保留 → 旧 seed/旧档地形与建筑逐位不变；dongbei「在表不在图」——定义保留（ICE 水面/spruce/盐值 0x77，structures.test 自动回归继续覆盖）但不给选区图码，从选区/随机自动消失
+- **组覆盖增强**：旧 5 区（beijing/sichuan/yunnan/neimenggu/xinjiang）地形/植被/动物字段不动，仅 structures 表追加 1 个稀有标志 kind（cellDensity ~0.02）；新 kind 独立 KIND_SALT → 不扰动既有结构判定
+- **anchorMargin 保锚点**：`MAX_STRUCT_RADIUS` 6→8 仅作 terragen 扫描边距，cell 内锚点边距改用 `anchorMargin(kind)=max(6, FOOTPRINT_R[kind])`，旧 kind 恒 6 → 旧世界建筑锚点逐位不变（机制详见 contracts/buildings.md §5）
+- 高度封顶 `topClamp(fy,h)=min(fy+h,62)`；现代高塔（24~30 格）所在沿海/城市区域地形压平（低 ridgeAmp）防削顶
+
+### 6.3 区域-建筑映射全表
+
+未列新 kind 的常见建筑一律复用既有 kind（青瓦/青砖/黄土/西北民居 → house；四合院 → siheyuan；雪乡木屋 → snow_cabin；蒙古包/绿洲农庄/傣族竹楼 → 同名旧 kind）。
+
+直辖市（4）：
+
+| id | 区 | 常见建筑 | 稀有标志建筑 | 波 |
+|---|---|---|---|---|
+| beijing | 北京 | 四合院（已有） | 天坛祈年殿 r6（圆形三重檐攒尖、蓝琉璃） | W1 |
+| tianjin | 天津 | 五大道小洋楼 r4 | 天津之眼 r6（跨河摩天轮 Ø11） | W1 |
+| shanghai | 上海 | 石库门 r4 | 东方明珠 r5（三球串联 ~26 格） | W4 |
+| chongqing | 重庆 | 洪崖洞吊脚楼群 r7（依山多层） | 解放碑 r3 | W6 |
+
+省（23）：
+
+| id | 区 | 常见建筑 | 稀有标志建筑 | 波 |
+|---|---|---|---|---|
+| hebei | 河北 | 青砖民居 | 赵州桥 r7（敞肩石拱） | W1 |
+| shanxi | 山西 | 四合院（复用） | 应县木塔 r5（八角五层木塔） | W2 |
+| liaoning | 辽宁 | 雪乡木屋（复用） | 沈阳故宫大政殿 r5（八角重檐攒尖） | W1 |
+| jilin | 吉林 | 雪乡木屋（复用） | 朝鲜族青瓦民居 r4 | W1 |
+| heilongjiang | 黑龙江 | 雪乡木屋（复用） | 圣索菲亚教堂 r5（红砖墙+绿洋葱穹顶） | W1 |
+| jiangsu | 江苏 | 青瓦民居 | 苏州园林 r7（亭+廊+月洞门+水池） | W4 |
+| zhejiang | 浙江 | 青瓦民居 | 雷峰塔 r4（八面五层楼阁塔） | W4 |
+| anhui | 安徽 | 徽派马头墙民居 r4（即标志） | — | W4 |
+| fujian | 福建 | 圆形土楼 r7 Ø15（即标志） | — | W4 |
+| jiangxi | 江西 | 青瓦民居 | 滕王阁 r5（多层绿琉璃歇山） | W4 |
+| shandong | 山东 | 胶东海草房 r4 | 孔庙大成殿 r5（重檐歇山） | W2 |
+| henan | 河南 | 青瓦民居 | 少林塔林 r7（一注多小方塔群） | W2 |
+| hubei | 湖北 | 青瓦民居 | 黄鹤楼 r5（五层攒尖金飞檐） | W5 |
+| hunan | 湖南 | 湘西吊脚楼 r4 | 岳阳楼 r4（三层盔顶） | W5 |
+| guangdong | 广东 | 骑楼街 r5 | 广州塔 r4（细腰扭转 ~28 格） | W5 |
+| hainan | 海南 | 湘西吊脚楼（复用） | 骑楼（复用广东） | W5 |
+| guizhou | 贵州 | 湘西吊脚楼（复用） | 甲秀楼（水中石桥+三层三檐） | W6 |
+| sichuan | 四川 | 川西民居（已有） | 乐山大佛 r7（依山坐佛） | W6 |
+| yunnan | 云南 | 傣族竹楼（已有） | 崇圣寺三塔 r5（一主二辅密檐白塔） | W6 |
+| shaanxi | 陕西 | 四合院（复用） | 大雁塔 r4（七层方形砖塔） | W2 |
+| gansu | 甘肃 | 黄土民居 | 嘉峪关 r8（关城城楼+城墙延伸段） | W3 |
+| qinghai | 青海 | 藏式碉房 r4 | 塔尔寺八宝塔群 r7（一排白塔） | W3 |
+| taiwan | 台湾 | 闽南红砖古厝 r4 | 台北101 r3（竹节退台 ~28 格） | W5 |
+
+自治区（5）+ 特区（2）：
+
+| id | 区 | 常见建筑 | 稀有标志建筑 | 波 |
+|---|---|---|---|---|
+| neimenggu | 内蒙古 | 蒙古包（已有） | 敖包 r3（石堆圆台+旗杆） | W2 |
+| guangxi | 广西 | 干栏式木楼 r4 | 程阳风雨桥 r8（石墩+木廊+桥头亭） | W5 |
+| xizang | 西藏 | 藏式碉房 r4（与青海共用） | 布达拉宫 r8（依山白宫+红宫+金顶，宽 ~16 格） | W3 |
+| ningxia | 宁夏 | 西北民居 | 108塔群 r7（阶梯三角排列白塔） | W2 |
+| xinjiang | 新疆 | 绿洲农庄（已有） | 苏公塔 r3（圆柱土黄砖塔+锥顶） | W3 |
+| hongkong | 香港 | 高层住宅楼 r4（幕墙玻璃） | 中银大厦 r4（三棱退台玻璃塔） | W6 |
+| aomen | 澳门 | 葡式粉彩小楼 r4 | 大三巴牌坊 r5（巴洛克石立面+阶梯） | W6 |
+
+波次执行：W0 契约先行 → W1 东北京津冀 → W2 黄河蒙宁 → W3 西域高原 → W4 华东 → W5 中南 → W6 西南港澳 → W7 终验（任务卡见 `docs/tasks/w0-contract.md` ~ `w7-final.md`）。
