@@ -1,104 +1,85 @@
-// 选区像素图数据单测（node 环境，零 DOM——regionPickerData.ts 是纯数据模块）：
-// 网格尺寸 / 字符集 / 34 码逐码像素数与 4-连通 / 码表↔REGIONS 一致性 /
-// PICKABLE 派生 / dongbei「在表不在图」。
-// 注：同款硬校验也在模块加载时执行（画错 import 即抛错），此处是可读的逐项断言。
+// 选区地图数据单测（node 环境，零 DOM——chinaGeo.ts / regionPickerData.ts 是纯数据模块）：
+// 34 省齐全 / 几何合法 / PICKABLE 派生 / dongbei「在表不在图」。
+// 地图为真实省界轮廓（DataV GeoAtlas 简化内嵌），旧字符像素图已退役。
 import { describe, expect, it } from 'vitest';
 
-import { CHINA_MAP, CODE_TO_REGION, MAP_H, MAP_W, PICKABLE } from '../src/ui/regionPickerData';
 import { REGIONS } from '../src/data/regions';
+import { CHINA_GEO } from '../src/ui/chinaGeo';
+import { PICKABLE } from '../src/ui/regionPickerData';
 
-/** 每个码的像素坐标表（从 CHINA_MAP 派生） */
-function pixelsOf(code: string): Array<[number, number]> {
-  const pts: Array<[number, number]> = [];
-  for (const [r, row] of CHINA_MAP.entries()) {
-    for (const [c, ch] of [...row!].entries()) {
-      if (ch === code) pts.push([r, c]);
-    }
-  }
-  return pts;
-}
+const EXPECT_34 = [
+  'beijing', 'tianjin', 'shanghai', 'chongqing',
+  'hebei', 'shanxi', 'liaoning', 'jilin', 'heilongjiang',
+  'jiangsu', 'zhejiang', 'anhui', 'fujian', 'jiangxi', 'shandong', 'henan',
+  'hubei', 'hunan', 'guangdong', 'hainan', 'sichuan', 'guizhou', 'yunnan',
+  'shaanxi', 'gansu', 'qinghai', 'taiwan',
+  'neimenggu', 'guangxi', 'xizang', 'ningxia', 'xinjiang',
+  'hongkong', 'aomen',
+] as const;
 
-/** BFS 4-连通判定 */
-function connected(pts: Array<[number, number]>): boolean {
-  const set = new Set(pts.map(([r, c]) => `${r},${c}`));
-  const seen = new Set<string>([pts[0]!.join(',')]);
-  const queue = [pts[0]!];
-  while (queue.length > 0) {
-    const [r, c] = queue.shift()!;
-    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const key = `${r + dr},${c + dc}`;
-      if (set.has(key) && !seen.has(key)) {
-        seen.add(key);
-        queue.push([r + dr, c + dc]);
+describe('CHINA_GEO 省界数据', () => {
+  it('恰好 34 个省级行政区，且与清单一致', () => {
+    expect(Object.keys(CHINA_GEO).sort()).toEqual([...EXPECT_34].sort());
+  });
+
+  it('每省至少 1 个环、每环至少 3 个有限坐标点、经纬度在中国范围', () => {
+    for (const [id, rings] of Object.entries(CHINA_GEO)) {
+      expect(rings.length, id).toBeGreaterThan(0);
+      for (const ring of rings) {
+        expect(ring.length, `${id} 环点数`).toBeGreaterThanOrEqual(3);
+        for (const pt of ring) {
+          const [lon, lat] = pt as number[];
+          expect(Number.isFinite(lon) && Number.isFinite(lat), `${id} 坐标有限`).toBe(true);
+          expect(lon, `${id} lon`).toBeGreaterThanOrEqual(73);
+          expect(lon, `${id} lon`).toBeLessThanOrEqual(136);
+          expect(lat, `${id} lat`).toBeGreaterThanOrEqual(3);
+          expect(lat, `${id} lat`).toBeLessThanOrEqual(54);
+        }
       }
     }
-  }
-  return seen.size === pts.length;
-}
-
-describe('CHINA_MAP 网格', () => {
-  it('40 行 × 48 列', () => {
-    expect(CHINA_MAP).toHaveLength(MAP_H);
-    expect(MAP_H).toBe(40);
-    expect(MAP_W).toBe(48);
-    for (const [i, row] of CHINA_MAP.entries()) {
-      expect(row, `第 ${i} 行`).toHaveLength(MAP_W);
-    }
   });
 
-  it('字符集 ∈ {0,1} ∪ 34 个区域码', () => {
-    const ok = new Set(['0', '1', ...Object.keys(CODE_TO_REGION)]);
-    for (const row of CHINA_MAP) {
-      for (const ch of row!) expect(ok.has(ch), `字符 '${ch}'`).toBe(true);
+  it('主图 bbox 覆盖疆域四至（漠河/喀什/抚远/三亚量级）', () => {
+    let minLon = 999, maxLon = -999, maxLat = -999;
+    for (const rings of Object.values(CHINA_GEO)) {
+      for (const ring of rings) {
+        for (const pt of ring) {
+          const [lon, lat] = pt as number[];
+          if (lat < 17) continue; // 南海诸岛不参与主图 bbox（与渲染层一致）
+          minLon = Math.min(minLon, lon);
+          maxLon = Math.max(maxLon, lon);
+          maxLat = Math.max(maxLat, lat);
+        }
+      }
+    }
+    expect(minLon).toBeLessThan(74);    // 帕米尔
+    expect(maxLon).toBeGreaterThan(134); // 抚远
+    expect(maxLat).toBeGreaterThan(53);  // 漠河
+  });
+
+  it('大型省份轮廓点数不低于简化保底（防止过度抽稀丢形）', () => {
+    const FLOORS: Partial<Record<string, number>> = {
+      xinjiang: 300, neimenggu: 400, xizang: 300, qinghai: 250,
+      heilongjiang: 250, gansu: 300, sichuan: 250, yunnan: 300,
+    };
+    for (const [id, floor] of Object.entries(FLOORS)) {
+      let pts = 0;
+      for (const ring of CHINA_GEO[id]!) pts += ring.length;
+      expect(pts, id).toBeGreaterThanOrEqual(floor!);
     }
   });
 });
 
-describe('34 区域码', () => {
-  const CODES = Object.keys(CODE_TO_REGION);
-
-  it('码表恰好 34 项', () => {
-    expect(CODES).toHaveLength(34);
-  });
-
-  it('旧六区码沿用不动', () => {
-    expect(CODE_TO_REGION['2']).toBe('sichuan');
-    expect(CODE_TO_REGION['3']).toBe('beijing');
-    expect(CODE_TO_REGION['4']).toBe('yunnan');
-    expect(CODE_TO_REGION['5']).toBe('neimenggu');
-    expect(CODE_TO_REGION['6']).toBe('xinjiang');
-    expect(CODE_TO_REGION['7']).toBe('heilongjiang');
-  });
-
-  for (const code of CODES) {
-    it(`码 '${code}'（${CODE_TO_REGION[code]!}）≥2 像素且 4-连通`, () => {
-      const pts = pixelsOf(code);
-      expect(pts.length, '像素数').toBeGreaterThanOrEqual(2);
-      expect(connected(pts), '4-连通').toBe(true);
-    });
-  }
-});
-
-describe('码表 ↔ 区域表一致性', () => {
-  it('CODE_TO_REGION 值全部在 REGIONS 中', () => {
-    for (const id of Object.values(CODE_TO_REGION)) {
-      expect(Object.prototype.hasOwnProperty.call(REGIONS, id)).toBe(true);
-    }
-  });
-
-  it('PICKABLE = Object.values(CODE_TO_REGION) 派生一致', () => {
-    expect([...PICKABLE]).toEqual(Object.values(CODE_TO_REGION));
+describe('PICKABLE 可选区域清单', () => {
+  it('= CHINA_GEO 键集（34 项）且全部在 REGIONS', () => {
+    expect([...PICKABLE].sort()).toEqual(Object.keys(CHINA_GEO).sort());
     expect(PICKABLE).toHaveLength(34);
+    for (const id of PICKABLE) expect(id in REGIONS).toBe(true);
   });
 
-  it('dongbei 在表不在图（旧档兼容：REGIONS 有定义、选区不可选）', () => {
-    expect(Object.prototype.hasOwnProperty.call(REGIONS, 'dongbei')).toBe(true);
+  it('遗留 dongbei 在表不在图；generic 不在图', () => {
+    expect('dongbei' in REGIONS).toBe(true);
     expect(PICKABLE).not.toContain('dongbei');
-    expect(Object.values(CODE_TO_REGION)).not.toContain('dongbei');
-  });
-
-  it('generic 是旧世界回落，不给选区码', () => {
-    expect(Object.prototype.hasOwnProperty.call(REGIONS, 'generic')).toBe(true);
     expect(PICKABLE).not.toContain('generic');
   });
 });

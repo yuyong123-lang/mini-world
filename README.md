@@ -1,6 +1,6 @@
 # 迷你世界 · Mini World
 
-网页版 3D 体素沙盒游戏 —— **中国地图选区 · 34 省级行政区风土世界** / 掘地建造 / 资源合成 / 熔炉冶炼 / 昼夜生存 / 狩猎战斗，**零外部素材**（纹理程序化生成、音效 WebAudio 实时合成）。
+网页版 3D 体素沙盒游戏 —— **中国地图选区 · 34 省级行政区风土世界** / 掘地建造 / 资源合成 / 熔炉冶炼 / 昼夜生存 / 狩猎战斗，**零外部素材**（纹理程序化生成、音效 WebAudio 实时合成；选区地图内嵌简化省界数据，来源 [DataV.GeoAtlas](https://geo.datav.aliyun.com/)）。
 
 ![tech](https://img.shields.io/badge/TypeScript-strict-blue) ![three](https://img.shields.io/badge/three.js-0.185-orange) ![tests](https://img.shields.io/badge/tests-977_pass-brightgreen) ![vite](https://img.shields.io/badge/Vite-7-purple)
 
@@ -104,7 +104,7 @@ npm run dev        # 打开浏览器 http://localhost:5173
 ```
 体素引擎   Chunk 16×64×16 · Uint8Array · 逐面剔除网格化 + AO 顶点色
 区域系统   区域编进 seed 前缀（Worker 协议零改动）· 34 省级行政区参数表（data/regions/ 分组模块）
-           像素中国地图选区（48×40 代码内嵌 34 色块 + 连通性硬校验）· 模块级活动区域状态
+           真实省界矢量中国地图选区（DataV 简化内嵌 + 墨卡托投影 + 悬停高亮）· 模块级活动区域状态
 地形生成   simplex fbm 大陆/丘陵/山脊/温度噪声 · 区域参数化（基准/振幅/阈值/梯田/强制群系）
 植被       8 种树几何（橡/槐/竹/云杉/胡杨/棕榈/茶/芭蕉）· 叶冠半径≤2 跨 chunk 不断枝
 结构生成   32×32 cell 确定性哈希锚点 · **51 种建筑 stamp**（world/buildings/ 分组模块，
@@ -146,7 +146,7 @@ npm run preview # 预览生产构建
 ### 扩展一个新区域（现有 34 区已全覆盖，新定制流程）
 
 1. `src/data/regions/parts/<组>.ts` 加一条 `RegionDef`（地形参数 / 树表 / 结构表 / 动物权重 / 氛围色）——`index.ts` 聚合导出自动生效
-2. `src/ui/regionPickerData.ts` 的 `CHINA_MAP` 像素地图与 `CODE_TO_REGION` 加对应色块（模块级校验把关：≥2 像素且 4-连通）
+2. 选区地图：34 省已由真实省界数据（`src/ui/chinaGeo.ts`，DataV GeoAtlas 简化内嵌）矢量渲染，新区域无需改图；`regionPickerData.ts` 的硬校验会自动把关数据完整性
 3. 标志建筑：`src/world/buildings/<组>.ts` 写 stamp 函数（工具见 `buildings/kit.ts`，铁律见 `docs/contracts/buildings.md`）；kind 类型与四张配置表在 `data/regions/index.ts` 与 `world/structures.ts` 登记一次
 4. 需要新方块时走三点注册：`blocks.json` → `registry.ts BLOCK` 表 → `atlas.ts`（ATLAS_TILES + PAINTER_TABLE）
 5. `tests/regions/<组>.test.ts` 补特征断言（确定性 / 群系 / 特征方块）——结构与跨 chunk 一致性测试由 `tests/structures.test.ts` 按 REGIONS 表自动派生，无需手写
