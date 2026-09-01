@@ -62,5 +62,32 @@
   { "key": "ITEM_IRON_HELMET", "name": "铁盔", "stackMax": 1, "iconTile": 64,
     "armor": { "slot": "head", "points": 2 } },
   { "key": "ITEM_IRON_CHESTPLATE", "name": "铁胸甲", "stackMax": 1, "iconTile": 65,
-    "armor": { "slot": "chest", "points": 6 } }
+    "armor": { "slot": "chest", "points": 6 } },
+
+  { "key": "ITEM_BAMBOO_SHOOT", "name": "竹笋", "stackMax": 64, "place": 21,
+    "food": { "hunger": 2 }, "iconTile": 82 },
+  { "key": "ITEM_GREY_TILE", "name": "青瓦", "stackMax": 64, "place": 23, "iconTile": 68 },
+  { "key": "ITEM_GREY_BRICK", "name": "青砖", "stackMax": 64, "place": 24, "iconTile": 69 },
+  { "key": "ITEM_RED_WALL", "name": "宫墙", "stackMax": 64, "place": 25, "iconTile": 70 },
+  { "key": "ITEM_YELLOW_TILE", "name": "琉璃瓦", "stackMax": 64, "place": 26, "iconTile": 71 },
+  { "key": "ITEM_RED_DOOR", "name": "朱红大门", "stackMax": 64, "place": 27, "iconTile": 72 },
+  { "key": "ITEM_BAMBOO_PLANK", "name": "竹板", "stackMax": 64, "place": 28, "iconTile": 73 },
+  { "key": "ITEM_SPRUCE_LOG", "name": "云杉木", "stackMax": 64, "place": 34, "iconTile": 79 },
+
+  { "key": "ITEM_BANANA", "name": "芭蕉", "stackMax": 64, "food": { "hunger": 3 }, "iconTile": 83 },
+  { "key": "ITEM_TEA_LEAF", "name": "茶叶", "stackMax": 64, "food": { "hunger": 1 }, "iconTile": 84 },
+  { "key": "ITEM_GRAPE", "name": "葡萄", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 85 },
+  { "key": "ITEM_MELON_SLICE", "name": "哈密瓜片", "stackMax": 64, "food": { "hunger": 4 }, "iconTile": 86 },
+  { "key": "ITEM_MILK", "name": "牛奶", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 87 },
+  { "key": "ITEM_FEATHER", "name": "羽毛", "stackMax": 64, "iconTile": 88 },
+
+  { "key": "ITEM_TANGHULU", "name": "糖葫芦", "stackMax": 64, "food": { "hunger": 4 }, "iconTile": 89 },
+  { "key": "ITEM_HOTPOT", "name": "火锅", "stackMax": 64, "food": { "hunger": 10 }, "iconTile": 90 },
+  { "key": "ITEM_ROAST_DUCK", "name": "烤鸭", "stackMax": 64, "food": { "hunger": 9 }, "iconTile": 91 },
+  { "key": "ITEM_RICE_NOODLE_SOUP", "name": "过桥米线", "stackMax": 64, "food": { "hunger": 9 }, "iconTile": 92 },
+  { "key": "ITEM_ROAST_LAMB", "name": "烤全羊", "stackMax": 64, "food": { "hunger": 12 }, "iconTile": 93 },
+  { "key": "ITEM_MILK_TEA", "name": "奶茶", "stackMax": 64, "food": { "hunger": 5 }, "iconTile": 94 },
+  { "key": "ITEM_LAMB_SKEWER", "name": "羊肉串", "stackMax": 64, "food": { "hunger": 6 }, "iconTile": 95 },
+  { "key": "ITEM_FROZEN_PEAR", "name": "冻梨", "stackMax": 64, "food": { "hunger": 4 }, "iconTile": 96 },
+  { "key": "ITEM_SUANCAI", "name": "酸菜", "stackMax": 64, "food": { "hunger": 5 }, "iconTile": 97 }
 ]

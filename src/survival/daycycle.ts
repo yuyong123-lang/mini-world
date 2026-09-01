@@ -35,8 +35,21 @@ const KEY_DUSK: SkyKeyframe = { top: '#ff7043', bottom: '#ffb26b', fog: '#e8956b
 /** 深夜（黑夜稳定段）：暗蓝黑 */
 const KEY_NIGHT: SkyKeyframe = { top: '#0b1026', bottom: '#1c2a45', fog: '#16203a' };
 
+/** 内置关键帧表（区域覆盖缺失时的回落值） */
+const KEY_DEFAULTS: Readonly<Record<SkyKeyName, SkyKeyframe>> = {
+  dawn: KEY_DAWN,
+  noon: KEY_NOON,
+  dusk: KEY_DUSK,
+  night: KEY_NIGHT,
+};
+
 /** 夜里前/后各占的过渡比例（10% 黄昏→夜、末尾 10% 夜→黎明） */
 const NIGHT_TRANSITION_FRACTION = 0.1;
+
+/** 区域可覆盖的关键帧名 */
+export type SkyKeyName = 'dawn' | 'noon' | 'dusk' | 'night';
+/** 区域天空覆盖表：任意关键帧子集（来自 regions.ts 的 RegionAtmosphere.sky） */
+export type RegionSkyOverrides = Partial<Record<SkyKeyName, SkyKeyframe>>;
 
 type RGB = [number, number, number];
 
@@ -78,10 +91,22 @@ function mix(c0: RGB, c1: RGB, t: number): RGB {
 export class DayCycle {
   /** 当前时刻（秒），恒在 0..CYCLE_LENGTH 区间内（已取模） */
   timeOfDay: number;
+  /** 区域关键帧覆盖（中国区域氛围；缺省空 = 全部用内置配色） */
+  private regionSky: RegionSkyOverrides = {};
 
   constructor(startAt = 0) {
     const len = CYCLE_LENGTH;
     this.timeOfDay = ((startAt % len) + len) % len; // 负数也能归到 0..len
+  }
+
+  /** 注入区域天空覆盖（换世界/读档时调用一次） */
+  setRegionSky(overrides: RegionSkyOverrides): void {
+    this.regionSky = overrides ?? {};
+  }
+
+  /** 有效关键帧：区域覆盖优先，缺省回落内置配色 */
+  private key(name: SkyKeyName): SkyKeyframe {
+    return this.regionSky[name] ?? (KEY_DEFAULTS[name] as SkyKeyframe);
   }
 
   get isNight(): boolean {
@@ -118,19 +143,23 @@ export class DayCycle {
    */
   skyColors(): { top: string; bottom: string; fog: string; sunAngle: number } {
     const sunAngle = this.computeSunAngle();
+    const dawn = this.key('dawn');
+    const noon = this.key('noon');
+    const dusk = this.key('dusk');
+    const night = this.key('night');
 
     if (!this.isNight) {
       const f = clamp01(this.timeOfDay / DAY_LENGTH);
       const keys =
-        f < 0.5 ? lerpKeys(KEY_DAWN, KEY_NOON, f / 0.5) : lerpKeys(KEY_NOON, KEY_DUSK, (f - 0.5) / 0.5);
+        f < 0.5 ? lerpKeys(dawn, noon, f / 0.5) : lerpKeys(noon, dusk, (f - 0.5) / 0.5);
       return { ...keys, sunAngle };
     }
 
     const nf = clamp01((this.timeOfDay - DAY_LENGTH) / NIGHT_LENGTH);
     const t = NIGHT_TRANSITION_FRACTION;
-    if (nf < t) return { ...lerpKeys(KEY_DUSK, KEY_NIGHT, nf / t), sunAngle };
-    if (nf > 1 - t) return { ...lerpKeys(KEY_NIGHT, KEY_DAWN, (nf - (1 - t)) / t), sunAngle };
+    if (nf < t) return { ...lerpKeys(dusk, night, nf / t), sunAngle };
+    if (nf > 1 - t) return { ...lerpKeys(night, dawn, (nf - (1 - t)) / t), sunAngle };
     // 深夜稳定段：纯夜色，不做任何插值
-    return { top: KEY_NIGHT.top, bottom: KEY_NIGHT.bottom, fog: KEY_NIGHT.fog, sunAngle };
+    return { top: night.top, bottom: night.bottom, fog: night.fog, sunAngle };
   }
 }

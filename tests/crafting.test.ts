@@ -24,9 +24,9 @@ describe('CraftingMatcher（契约 §6）', () => {
     CraftingMatcher.load(recipesData as unknown as Recipe[]);
   });
 
-  it('加载内置配方共 18 条', () => {
+  it('加载内置配方共 28 条', () => {
     const keys = (recipesData as unknown as Recipe[]).map((r) => r.out.key);
-    expect(keys).toHaveLength(18);
+    expect(keys).toHaveLength(28);
     expect(keys.filter((k) => k === P)).toHaveLength(1);
     expect(keys.filter((k) => k.startsWith('ITEM_STONE_'))).toHaveLength(2);
   });

@@ -75,6 +75,86 @@ export function buildAnimalView(species: AnimalSpeciesDef): THREE.Group {
     g.add(leg);
   }
 
+  // ---- 区域物种特例装饰（在通用体型上叠加辨识特征）----
+  switch (species.key) {
+    case 'panda': {
+      // 黑四肢 + 黑耳 + 眼圈：白身黑四肢的经典配色
+      for (const leg of g.children.filter((c) => c !== body && c !== head && c !== snout)) {
+        (leg as THREE.Mesh).material = new THREE.MeshLambertMaterial({ color: 0x202020 });
+      }
+      const earL = box(0.12, 0.12, 0.1, 0x202020);
+      earL.position.set(-0.14, bodyY + 0.32, 0.5);
+      const earR = box(0.12, 0.12, 0.1, 0x202020);
+      earR.position.set(0.14, bodyY + 0.32, 0.5);
+      g.add(earL, earR);
+      const eyeBand = box(0.3, 0.08, 0.06, 0x202020);
+      eyeBand.position.set(0, bodyY + 0.18, 0.68);
+      g.add(eyeBand);
+      break;
+    }
+    case 'elephant': {
+      // 长鼻（头前竖垂盒）+ 双象牙
+      const trunk = box(0.16, 0.5, 0.16, darken(species.viewColor, 0.8));
+      trunk.position.set(0, bodyY - 0.1, 0.78);
+      g.add(trunk);
+      const tuskL = box(0.06, 0.06, 0.24, 0xf0ead8);
+      tuskL.position.set(-0.14, bodyY + 0.02, 0.8);
+      const tuskR = box(0.06, 0.06, 0.24, 0xf0ead8);
+      tuskR.position.set(0.14, bodyY + 0.02, 0.8);
+      g.add(tuskL, tuskR);
+      break;
+    }
+    case 'peacock': {
+      // 尾屏：身后三片彩色薄盒呈扇形展开
+      const colors = [0x2a8a4a, 0x2a8a9a, 0x8a6a2a] as const;
+      for (const [i, c] of colors.entries()) {
+        const plume = box(0.1, 0.34, 0.02, c);
+        plume.position.set(-0.16 + i * 0.16, bodyY + 0.24, -0.46);
+        plume.rotation.x = -0.5;
+        g.add(plume);
+      }
+      // 头顶小冠羽
+      const crest = box(0.04, 0.12, 0.04, 0x2a8a9a);
+      crest.position.set(0, bodyY + 0.36, 0.52);
+      g.add(crest);
+      break;
+    }
+    case 'camel': {
+      // 双峰：背上两个隆起
+      const hump1 = box(0.3, 0.24, 0.24, darken(species.viewColor, 0.85));
+      hump1.position.set(0, bodyY + 0.3, 0.12);
+      const hump2 = box(0.3, 0.24, 0.24, darken(species.viewColor, 0.85));
+      hump2.position.set(0, bodyY + 0.3, -0.16);
+      g.add(hump1, hump2);
+      break;
+    }
+    case 'horse': {
+      // 立颈 + 鬃毛
+      const neck = box(0.18, 0.42, 0.2, species.viewColor);
+      neck.position.set(0, bodyY + 0.26, 0.44);
+      neck.rotation.x = 0.35;
+      g.add(neck);
+      const mane = box(0.06, 0.34, 0.16, darker);
+      mane.position.set(0, bodyY + 0.32, 0.36);
+      mane.rotation.x = 0.35;
+      g.add(mane);
+      break;
+    }
+    case 'tiger': {
+      // 黑条纹：身体两侧与背脊的窄条盒
+      for (const zOff of [-0.22, 0, 0.22] as const) {
+        const stripeL = box(0.02, 0.3, 0.08, 0x282828);
+        stripeL.position.set(-0.27, bodyY, zOff);
+        const stripeR = box(0.02, 0.3, 0.08, 0x282828);
+        stripeR.position.set(0.27, bodyY, zOff);
+        g.add(stripeL, stripeR);
+      }
+      break;
+    }
+    default:
+      break; // pig/cow/sheep 用通用造型
+  }
+
   return g;
 }
 

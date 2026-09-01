@@ -16,12 +16,16 @@ const MOUSE_SENS_DEFAULT = 0.0022;
 const PITCH_LIMIT = 1.5533;
 /** 水中移速倍率（黏滞感） */
 const SWIM_SPEED_MUL = 0.55;
-/** 水中重力倍率（近似浮力：下沉慢） */
-const SWIM_GRAVITY_MUL = 0.35;
-/** 水中垂直阻尼（每秒保留比例）——限制沉速/上浮速度 */
+/** 水中净浮力加速度（向上）：不按键时把玩家托向水面——漂浮泳姿的来源 */
+const BUOYANCY_ACCEL = 6;
+/** 眼睛浮出水面后的回落重力倍率：与浮力构成水面附近的软平衡（轻微起伏后稳定） */
+const SWIM_SURFACE_GRAVITY_MUL = 0.25;
+/** 水中垂直阻尼（每秒保留比例）——把上下震荡收敛成平稳漂浮，并限制沉速/上浮速度 */
 const SWIM_DRAG_PER_SEC = 0.12;
-/** 按住空格的水中上浮加速度 */
+/** 按住空格的水中上浮加速度（蹿出水面/跳上岸用） */
 const SWIM_UP_ACCEL = 16;
+/** 水中按住 Shift 的下潜加速度（潜到水底/冰面下） */
+const SWIM_DIVE_ACCEL = 12;
 /** 玩家是否处于水中（供摔落伤豁免/视图特效查询） */
 // 字段声明在类内（见 inWater）
 /** 眼高（格）。注意：契约 constants.ts 没有 EYE_HEIGHT，故就地定义；
@@ -313,17 +317,20 @@ export class PlayerController implements PhysicsBody {
     this.vel.z += (dir.z * speed - this.vel.z) * k;
 
     if (inWater) {
-      // ---- 游泳物理：低重力 + 垂直阻尼 + 空格上浮 ----
-      this.vel.y += GRAVITY * SWIM_GRAVITY_MUL * step;
+      // ---- 游泳物理：默认漂浮 ----
+      // 平衡点在水面：眼睛仍在水下 → 净浮力向上托；眼睛浮出 → 弱重力轻微回落。
+      // 垂直阻尼把这对上下震荡收敛成「稳稳漂在水面」的观感，绝不直接沉底。
+      // 空格 = 用力上浮（可蹿出水面跳上岸）；Shift = 下潜（水底/冰面下探索）。
+      const eyeY = this.pos.y + EYE_HEIGHT;
+      const eyeInWater = world.isLiquid
+        ? world.isLiquid(Math.floor(this.pos.x), Math.floor(eyeY), Math.floor(this.pos.z))
+        : true; // 无 isLiquid 注入（纯 isSolid 世界）时保持旧的低重力行为，不产生浮力
+      this.vel.y += eyeInWater
+        ? BUOYANCY_ACCEL * step
+        : GRAVITY * SWIM_SURFACE_GRAVITY_MUL * step;
       this.vel.y *= Math.pow(SWIM_DRAG_PER_SEC, step); // 指数阻尼，帧率无关
       if (this.keys.has('Space')) this.vel.y += SWIM_UP_ACCEL * step;
-      // 出水瞬间的助推：贴水面游动能跳上河岸
-      if (this.onGround === false && this.vel.y > 0) {
-        const headY = this.pos.y + this.height;
-        if (world.isSolid(Math.floor(this.pos.x), Math.floor(headY), Math.floor(this.pos.z))) {
-          // 头顶仍被挡 → 保持水中物理即可，无需额外处理
-        }
-      }
+      else if (this.keys.has('ShiftLeft')) this.vel.y -= SWIM_DIVE_ACCEL * step; // 下潜为负向
     } else {
       this.vel.y += GRAVITY * step;
     }

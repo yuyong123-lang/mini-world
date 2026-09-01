@@ -103,8 +103,8 @@ describe('Inventory（契约 §5）', () => {
 });
 
 describe('items.json 数据完整性', () => {
-  it('加载全部 42 个物品定义', () => {
-    expect(ItemRegistry.count()).toBe(42);
+  it('加载全部 65 个物品定义', () => {
+    expect(ItemRegistry.count()).toBe(65);
   });
 
   it('place 类物品的 place 与 blocks.json id 对齐（抽查）', () => {

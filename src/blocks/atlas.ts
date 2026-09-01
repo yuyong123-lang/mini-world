@@ -96,6 +96,39 @@ export const ATLAS_TILES: Record<string, number> = Object.freeze({
   iron_helmet: 64,
   /** 铁胸甲图标 */
   iron_chestplate: 65,
+  // ---- 中国区域扩展（66..81 区域方块，82..97 区域物品图标）----
+  bamboo: 66,
+  bamboo_leaf: 67,
+  grey_tile: 68,
+  grey_brick: 69,
+  red_wall: 70,
+  yellow_tile: 71,
+  red_door: 72,
+  bamboo_plank: 73,
+  palm_leaf: 74,
+  tea_leaves: 75,
+  poplar_leaves: 76,
+  grape_vine: 77,
+  melon: 78,
+  spruce_log: 79,
+  spruce_leaves: 80,
+  ice: 81,
+  bamboo_shoot: 82,
+  banana: 83,
+  tea_leaf: 84,
+  grape: 85,
+  melon_slice: 86,
+  milk: 87,
+  feather: 88,
+  tanghulu: 89,
+  hotpot: 90,
+  roast_duck: 91,
+  rice_noodle_soup: 92,
+  roast_lamb: 93,
+  milk_tea: 94,
+  lamb_skewer: 95,
+  frozen_pear: 96,
+  suancai: 97,
 });
 
 // ---------------------------------------------------------------------------
@@ -797,6 +830,325 @@ function chestplatePainter(main: string, dark: string): Painter {
 }
 
 // ---------------------------------------------------------------------------
+// 中国区域扩展绘制器（66..81 区域方块，82..97 区域物品图标）
+// ---------------------------------------------------------------------------
+
+const PAL_BAMBOO: readonly string[] = ['#a8c060', '#98b055', '#b5cc70', '#8aa04a'];
+const PAL_BAMBOO_LEAF: readonly string[] = ['#6ba832', '#5c9826', '#7cb83e', '#4f8620'];
+const PAL_TILE_GREY: readonly string[] = ['#5a636e', '#525a64', '#646d78', '#4a525c'];
+const PAL_BRICK_GREY: readonly string[] = ['#8a9298', '#7e868c', '#969ea4', '#747c82'];
+const PAL_WALL_RED: readonly string[] = ['#9e3528', '#8e2c20', '#aa3e30', '#80261c'];
+const PAL_TILE_YELLOW: readonly string[] = ['#e0b030', '#d0a020', '#f0c440', '#c09018'];
+const PAL_BAMBOO_PLANK: readonly string[] = ['#c8b060', '#bca455', '#d4bc6c', '#b09a4a'];
+const PAL_PALM: readonly string[] = ['#4a9838', '#3f8a2e', '#57a842', '#357a26'];
+const PAL_TEA: readonly string[] = ['#3a6e2a', '#2f5e20', '#457e34', '#28501c'];
+const PAL_POPLAR: readonly string[] = ['#d8b030', '#c8a020', '#e8c440', '#b89018'];
+const PAL_SPRUCE_BARK: readonly string[] = ['#4a3520', '#3e2c18', '#563e26', '#342414'];
+const PAL_SPRUCE_LEAF: readonly string[] = ['#2a4a3a', '#203c30', '#34584a', '#1a3028'];
+const PAL_ICE: readonly string[] = ['#b8d8e8', '#a8cce0', '#c8e4f0', '#98c0d8'];
+const PAL_MELON_RIND: readonly string[] = ['#b8a850', '#ac9c46', '#c4b45a', '#a09040'];
+
+/** 竹竿：黄绿竖纹 + 两道竹节 */
+function pBamboo(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_BAMBOO);
+  for (let x = 1; x < TILE_PX; x += 4) {
+    for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, '#8aa04a');
+  }
+  fillBox(ctx, x0, y0 + 5, TILE_PX, 1, '#6a8038');
+  fillBox(ctx, x0, y0 + 11, TILE_PX, 1, '#6a8038');
+}
+
+/** 竹叶：黄绿噪点 + 斜向亮叶脉 */
+function pBambooLeaf(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_BAMBOO_LEAF);
+  for (let i = 0; i < 10; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#8ed04a');
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#3e6e18');
+}
+
+/** 青瓦：灰蓝底 + 波浪瓦垄（竖向明暗条 + 横向搭接缝） */
+function pGreyTile(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_TILE_GREY);
+  for (let x = 0; x < TILE_PX; x++) {
+    const shade = x % 4 === 0 ? '#434b55' : x % 4 === 2 ? '#6e7883' : null;
+    if (shade) for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, shade);
+  }
+  fillBox(ctx, x0, y0 + 7, TILE_PX, 1, '#3a424c');
+  fillBox(ctx, x0, y0 + 15, TILE_PX, 1, '#3a424c');
+}
+
+/** 青砖：灰青砖体 + 交错砖缝 */
+function pGreyBrick(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_BRICK_GREY);
+  for (const y of [3, 7, 11, 15]) fillBox(ctx, x0, y0 + y, TILE_PX, 1, '#5a6268');
+  for (let row = 0; row < 4; row++) {
+    const off = row % 2 === 0 ? 3 : 11;
+    for (let y = row * 4; y < row * 4 + 3; y++) fillPx(ctx, x0 + off, y0 + y, '#5a6268');
+  }
+  for (let i = 0; i < 5; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#a4acb2');
+}
+
+/** 宫墙：朱红底 + 水平抹灰缝 */
+function pRedWall(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_WALL_RED);
+  for (const y of [5, 11]) fillBox(ctx, x0, y0 + y, TILE_PX, 1, '#6e2018');
+  for (let i = 0; i < 7; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#b84c3c');
+}
+
+/** 琉璃瓦：金黄底 + 竖向瓦垄高光 */
+function pYellowTile(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_TILE_YELLOW);
+  for (let x = 0; x < TILE_PX; x++) {
+    const shade = x % 4 === 0 ? '#a87e14' : x % 4 === 2 ? '#ffd860' : null;
+    if (shade) for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, shade);
+  }
+  fillBox(ctx, x0, y0 + 15, TILE_PX, 1, '#987010');
+}
+
+/** 朱红大门：红木底 + 竖板缝 + 金色门钉 */
+function pRedDoor(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_WALL_RED);
+  for (const x of [4, 8, 12]) for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, '#6a1e14');
+  for (const gx of [2, 6, 10, 14]) {
+    for (const gy of [3, 8, 13]) {
+      fillBox(ctx, x0 + gx - 1, y0 + gy - 1, 2, 2, '#f0c040');
+    }
+  }
+}
+
+/** 竹板：黄绿竹板横条拼面 */
+function pBambooPlank(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_BAMBOO_PLANK);
+  for (const y of [0, 4, 8, 12]) fillBox(ctx, x0, y0 + y, TILE_PX, 1, '#8a7434');
+  for (let i = 0; i < 6; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#e0cc80');
+}
+
+/** 芭蕉叶：亮绿宽叶 + 中脉 */
+function pPalmLeaf(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_PALM);
+  fillBox(ctx, x0, y0 + 7, TILE_PX, 2, '#2e6a20');
+  for (let i = 0; i < 8; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#6cc050');
+}
+
+/** 茶叶：深绿细密噪点 + 嫩芽亮点 */
+function pTeaLeaves(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_TEA);
+  for (let i = 0; i < 9; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#6aa848');
+}
+
+/** 胡杨叶：金黄噪点 + 橙斑 */
+function pPoplarLeaves(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_POPLAR);
+  for (let i = 0; i < 7; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#f0d860');
+  for (let i = 0; i < 5; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#a87810');
+}
+
+/** 葡萄藤：叶底 + 紫色果串点缀 */
+function pGrapeVine(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_PALM);
+  for (const [gx, gy] of [[4, 4], [10, 3], [7, 9], [12, 11], [3, 12]] as const) {
+    fillBox(ctx, x0 + gx, y0 + gy, 2, 2, '#6a3a98');
+    fillPx(ctx, x0 + gx, y0 + gy, '#8a5ab8');
+  }
+}
+
+/** 哈密瓜：黄绿网纹瓜皮 */
+function pMelon(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_MELON_RIND);
+  for (let i = 0; i < 16; i++) {
+    const x = ri(rng);
+    const y = ri(rng);
+    fillPx(ctx, x0 + x, y0 + y, '#e8dc90');
+    if (x < 15) fillPx(ctx, x0 + x + 1, y0 + y, '#e8dc90');
+  }
+}
+
+/** 云杉木：深棕竖纹树皮 */
+function pSpruceLog(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_SPRUCE_BARK);
+  for (let x = 2; x < TILE_PX; x += 5) {
+    for (let y = 0; y < TILE_PX; y++) fillPx(ctx, x0 + x, y0 + y, '#2c1e10');
+  }
+}
+
+/** 雪杉叶：蓝绿针叶 + 覆雪白点 */
+function pSpruceLeaves(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_SPRUCE_LEAF);
+  for (let i = 0; i < 10; i++) fillPx(ctx, x0 + ri(rng), y0 + ri(rng), '#e8f4f8');
+}
+
+/** 冰：淡蓝晶面 + 斜向裂纹 */
+function pIce(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  noiseFill(ctx, x0, y0, rng, PAL_ICE);
+  for (let i = 0; i < 8; i++) {
+    const sx = ri(rng);
+    const sy = ri(rng);
+    fillPx(ctx, x0 + sx, y0 + sy, '#e8f8ff');
+    if (sx < 15) fillPx(ctx, x0 + sx + 1, y0 + Math.min(15, sy + 1), '#e8f8ff');
+  }
+}
+
+// ---- 区域物品图标（82..97）----
+
+/** 竹笋：宝塔形三层锥体 */
+function pBambooShoot(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 6, y0 + 12, 4, 2, '#c8a850'); // 基座
+  fillBox(ctx, x0 + 5, y0 + 9, 6, 3, '#b8c060');
+  fillBox(ctx, x0 + 6, y0 + 6, 4, 3, '#a8b050');
+  fillBox(ctx, x0 + 7, y0 + 3, 2, 3, '#98a040');
+  fillBox(ctx, x0 + 6, y0 + 10, 1, 2, '#d8dc80'); // 高光
+}
+
+/** 芭蕉：黄色弯月果 */
+function pBanana(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  for (let i = 0; i < 9; i++) {
+    const y = 4 + i;
+    const w = i < 4 ? 3 : 4;
+    fillBox(ctx, x0 + 4 + i, y0 + y, w, 1, i === 8 ? '#8a7420' : '#f0d040');
+  }
+  fillBox(ctx, x0 + 4, y0 + 4, 2, 2, '#5c7a2a'); // 蒂
+  fillBox(ctx, x0 + 8, y0 + 8, 3, 1, '#fff0a0'); // 高光
+}
+
+/** 茶叶：两片对生嫩叶 */
+function pTeaLeaf(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 4, y0 + 8, 4, 3, '#3a6e2a');
+  fillBox(ctx, x0 + 8, y0 + 5, 4, 3, '#4a8236');
+  fillBox(ctx, x0 + 7, y0 + 6, 2, 6, '#2e5a20'); // 茎
+  fillPx(ctx, x0 + 9, y0 + 6, '#7cb858');
+}
+
+/** 葡萄：紫色果串 */
+function pGrape(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  for (const [gx, gy] of [[6, 6], [9, 6], [4, 9], [7, 9], [10, 9], [5, 12], [8, 12]] as const) {
+    fillBox(ctx, x0 + gx, y0 + gy, 3, 3, '#6a3a98');
+    fillPx(ctx, x0 + gx, y0 + gy, '#9a6ac8');
+  }
+  fillBox(ctx, x0 + 7, y0 + 3, 2, 3, '#5c7a2a'); // 藤
+}
+
+/** 哈密瓜片：橙色半月切片 */
+function pMelonSlice(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 3, y0 + 8, 10, 2, '#e8a040'); // 瓤
+  fillBox(ctx, x0 + 2, y0 + 10, 12, 2, '#b8a850'); // 皮
+  fillBox(ctx, x0 + 5, y0 + 8, 2, 2, '#f8c070'); // 高光
+  fillPx(ctx, x0 + 9, y0 + 9, '#f8c070');
+}
+
+/** 牛奶：白色奶盒 */
+function pMilk(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 4, y0 + 5, 8, 9, '#f0f0f0');
+  fillBox(ctx, x0 + 5, y0 + 3, 6, 2, '#d8d8d8'); // 盒顶折边
+  fillBox(ctx, x0 + 4, y0 + 9, 8, 3, '#60a8e8'); // 蓝标
+  fillBox(ctx, x0 + 4, y0 + 5, 1, 9, '#d0d0d0'); // 侧影
+}
+
+/** 羽毛：白色斜羽 */
+function pFeather(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  for (let i = 0; i < 9; i++) {
+    fillBox(ctx, x0 + 3 + i, y0 + 12 - i, 3, 2, i % 2 === 0 ? '#f4f8fc' : '#e0e8f0');
+  }
+  for (let i = 0; i < 9; i++) fillPx(ctx, x0 + 4 + i, y0 + 12 - i, '#b8c4d0'); // 羽轴
+}
+
+/** 糖葫芦：竹签串三颗糖球 */
+function pTanghulu(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 7, y0 + 2, 2, 12, '#c8a860'); // 竹签
+  for (const gy of [4, 8, 12] as const) {
+    fillBox(ctx, x0 + 5, y0 + gy, 6, 4, '#c02a1e');
+    fillPx(ctx, x0 + 6, y0 + gy + 1, '#f06050'); // 糖衣高光
+  }
+}
+
+/** 火锅：红铜锅 + 白汤 + 红油 */
+function pHotpot(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 2, y0 + 6, 12, 6, '#b03a2e'); // 锅身
+  fillBox(ctx, x0 + 1, y0 + 4, 14, 3, '#c84a3c'); // 锅沿
+  fillBox(ctx, x0 + 2, y0 + 5, 6, 1, '#f8f0e0'); // 白汤
+  fillBox(ctx, x0 + 9, y0 + 5, 5, 1, '#d04020'); // 红汤
+  fillBox(ctx, x0 + 4, y0 + 12, 8, 1, '#8a2a20'); // 锅底
+}
+
+/** 烤鸭：枣红油亮的整鸭 */
+function pRoastDuck(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 4, y0 + 7, 9, 6, '#b86020'); // 鸭身
+  fillBox(ctx, x0 + 3, y0 + 5, 4, 4, '#c87028'); // 鸭腿部位
+  fillBox(ctx, x0 + 11, y0 + 4, 3, 4, '#a85018'); // 鸭颈
+  fillBox(ctx, x0 + 12, y0 + 6, 3, 2, '#e8a050'); // 鸭头
+  fillBox(ctx, x0 + 5, y0 + 8, 3, 2, '#e8a050'); // 油亮高光
+}
+
+/** 过桥米线：大碗 + 米线 + 汤面 */
+function pRiceNoodleSoup(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 2, y0 + 8, 12, 5, '#4a7ab8'); // 碗
+  fillBox(ctx, x0 + 1, y0 + 7, 14, 2, '#5a8ac8'); // 碗沿
+  for (let x = 0; x < 12; x += 3) fillBox(ctx, x0 + 3 + x, y0 + 7, 2, 1, '#f8f4e8'); // 米线
+  fillPx(ctx, x0 + 5, y0 + 7, '#c84a3c'); // 辣油点
+}
+
+/** 烤全羊：焦香全羊架 */
+function pRoastLamb(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 3, y0 + 6, 10, 6, '#a86830'); // 躯干
+  fillBox(ctx, x0 + 1, y0 + 4, 4, 4, '#98582a'); // 后腿
+  fillBox(ctx, x0 + 11, y0 + 5, 4, 4, '#98582a'); // 前腿
+  fillBox(ctx, x0 + 12, y0 + 3, 3, 3, '#8a4c24'); // 羊头
+  fillBox(ctx, x0 + 5, y0 + 7, 4, 2, '#c88848'); // 焦糖高光
+  fillBox(ctx, x0 + 6, y0 + 2, 1, 10, '#6a4a28'); // 烤签
+}
+
+/** 奶茶：杯装奶茶 + 封口膜 */
+function pMilkTea(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 4, y0 + 6, 8, 8, '#c89050'); // 奶茶
+  fillBox(ctx, x0 + 3, y0 + 5, 10, 2, '#e8e0d0'); // 封口膜
+  fillBox(ctx, x0 + 4, y0 + 6, 1, 8, '#daa860'); // 侧光
+  fillBox(ctx, x0 + 8, y0 + 10, 2, 4, '#8a5a30'); // 珍珠
+}
+
+/** 羊肉串：竹签串三块烤肉 */
+function pLambSkewer(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 3, y0 + 8, 10, 1, '#c8a860'); // 竹签（斜放感）
+  for (const [gx, gy] of [[3, 5], [7, 6], [10, 4]] as const) {
+    fillBox(ctx, x0 + gx, y0 + gy, 3, 3, '#9c5830');
+    fillPx(ctx, x0 + gx, y0 + gy, '#c07848'); // 焦香边
+  }
+}
+
+/** 冻梨：深褐梨身 + 白霜 */
+function pFrozenPear(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  fillBox(ctx, x0 + 5, y0 + 7, 6, 6, '#4a3c30'); // 梨身
+  fillBox(ctx, x0 + 6, y0 + 4, 4, 3, '#423628'); // 梨肩
+  fillBox(ctx, x0 + 7, y0 + 3, 2, 1, '#5c4c3a'); // 梨柄
+  for (const [fx, fy] of [[5, 8], [8, 10], [6, 12], [9, 7]] as const) {
+    fillPx(ctx, x0 + fx, y0 + fy, '#d8e8f0'); // 白霜
+  }
+}
+
+/** 酸菜：黄绿菜丝堆 */
+function pSuancai(ctx: CanvasRenderingContext2D, x0: number, y0: number, rng: Rng): void {
+  void rng;
+  for (let i = 0; i < 5; i++) {
+    const y = 5 + i * 2;
+    fillBox(ctx, x0 + 3 + (i % 2), y0 + y, 10 - (i % 2) * 2, 1, i % 2 === 0 ? '#c8c060' : '#a8b048');
+  }
+  fillBox(ctx, x0 + 5, y0 + 4, 6, 1, '#88903a'); // 顶部菜叶
+  fillPx(ctx, x0 + 4, y0 + 6, '#e0d880');
+}
+
+// ---------------------------------------------------------------------------
 // 绘制器注册表
 // ---------------------------------------------------------------------------
 
@@ -849,6 +1201,39 @@ const PAINTER_TABLE: PainterEntry[] = [
   { tile: 63, name: 'leather_chestplate', paint: chestplatePainter('#a5692e', '#6e441c') },
   { tile: 64, name: 'iron_helmet', paint: helmetPainter('#c8ced8', '#7e8894') },
   { tile: 65, name: 'iron_chestplate', paint: chestplatePainter('#c8ced8', '#7e8894') },
+  // ---- 中国区域扩展（66..81 区域方块，82..97 区域物品图标）----
+  { tile: 66, name: 'bamboo', paint: pBamboo },
+  { tile: 67, name: 'bamboo_leaf', paint: pBambooLeaf },
+  { tile: 68, name: 'grey_tile', paint: pGreyTile },
+  { tile: 69, name: 'grey_brick', paint: pGreyBrick },
+  { tile: 70, name: 'red_wall', paint: pRedWall },
+  { tile: 71, name: 'yellow_tile', paint: pYellowTile },
+  { tile: 72, name: 'red_door', paint: pRedDoor },
+  { tile: 73, name: 'bamboo_plank', paint: pBambooPlank },
+  { tile: 74, name: 'palm_leaf', paint: pPalmLeaf },
+  { tile: 75, name: 'tea_leaves', paint: pTeaLeaves },
+  { tile: 76, name: 'poplar_leaves', paint: pPoplarLeaves },
+  { tile: 77, name: 'grape_vine', paint: pGrapeVine },
+  { tile: 78, name: 'melon', paint: pMelon },
+  { tile: 79, name: 'spruce_log', paint: pSpruceLog },
+  { tile: 80, name: 'spruce_leaves', paint: pSpruceLeaves },
+  { tile: 81, name: 'ice', paint: pIce },
+  { tile: 82, name: 'bamboo_shoot', paint: pBambooShoot },
+  { tile: 83, name: 'banana', paint: pBanana },
+  { tile: 84, name: 'tea_leaf', paint: pTeaLeaf },
+  { tile: 85, name: 'grape', paint: pGrape },
+  { tile: 86, name: 'melon_slice', paint: pMelonSlice },
+  { tile: 87, name: 'milk', paint: pMilk },
+  { tile: 88, name: 'feather', paint: pFeather },
+  { tile: 89, name: 'tanghulu', paint: pTanghulu },
+  { tile: 90, name: 'hotpot', paint: pHotpot },
+  { tile: 91, name: 'roast_duck', paint: pRoastDuck },
+  { tile: 92, name: 'rice_noodle_soup', paint: pRiceNoodleSoup },
+  { tile: 93, name: 'roast_lamb', paint: pRoastLamb },
+  { tile: 94, name: 'milk_tea', paint: pMilkTea },
+  { tile: 95, name: 'lamb_skewer', paint: pLambSkewer },
+  { tile: 96, name: 'frozen_pear', paint: pFrozenPear },
+  { tile: 97, name: 'suancai', paint: pSuancai },
 ];
 
 // 十帧裂纹（34..43，不与任何材质重叠）

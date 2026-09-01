@@ -30,8 +30,19 @@ export const DESPAWN_DIST = 48;
 export const ANIMAL_CAP_DEFAULT = 24;
 /** 群成员采样偏移上限（格）：成员落在群心 ±HERD_SPREAD 的整数邻域内 */
 const HERD_SPREAD = 3;
-/** 动物物种数（等权选取） */
-const SPECIES_COUNT = 3;
+
+/** 物种刷怪权重表条目（总权重任意，采样时归一化） */
+export interface SpeciesWeight {
+  key: AnimalSpeciesKey;
+  weight: number;
+}
+
+/** 缺省物种权重（无区域注入时 = 历史 pig/cow/sheep 等权行为） */
+const DEFAULT_SPECIES_WEIGHTS: readonly SpeciesWeight[] = [
+  { key: 'pig', weight: 1 },
+  { key: 'cow', weight: 1 },
+  { key: 'sheep', weight: 1 },
+];
 
 const TAU = Math.PI * 2;
 
@@ -60,8 +71,14 @@ export interface SpawnOpts {
   /**
    * 自定义「地面适合刷动物」谓词；缺省为「支撑方块是 GRASS」（T83 规格）。
    * 传入后完全接管动物地面过滤（如做雪原生物群系差异），海平面门槛仍然生效。
+   * 区域注入建议：region.animalGround 包含判定（如骆驼可刷在 SAND 上）。
    */
   spawnAnimalOnGround?: (p: Vec3) => boolean;
+  /**
+   * 区域物种权重表（中国区域系统）：按权重采样本群物种。
+   * 缺省 pig/cow/sheep 等权（与历史行为一致）。
+   */
+  speciesWeights?: readonly SpeciesWeight[];
   /** 成群刷新：每群规模区间（闭区间，含端点）；缺省 [2,4] */
   animalHerd?: [number, number];
   /** 随机源注入（默认 Math.random）；单测传 mulberry32(seed) 保证可复现 */
@@ -101,6 +118,9 @@ export class Spawner {
   private readonly animalRing: [number, number];
   private readonly monsterRing: [number, number];
   private readonly animalGroundFn: ((p: Vec3) => boolean) | null;
+  private readonly speciesWeights: readonly SpeciesWeight[];
+  /** 权重总和（构造期一次算好，采样时前缀和遍历） */
+  private readonly speciesWeightTotal: number;
   private readonly rng: () => number;
 
   private acc = 0;
@@ -119,6 +139,12 @@ export class Spawner {
     this.animalRing = opts.animalRing ? [opts.animalRing[0], opts.animalRing[1]] : [16, 32];
     this.monsterRing = opts.monsterRing ? [opts.monsterRing[0], opts.monsterRing[1]] : [24, 40];
     this.animalGroundFn = opts.spawnAnimalOnGround ?? null;
+    // 权重表防御性收紧：仅保留正权重条目；全空回落缺省表
+    const w = (opts.speciesWeights ?? DEFAULT_SPECIES_WEIGHTS).filter(
+      (e) => Number.isFinite(e.weight) && e.weight > 0,
+    );
+    this.speciesWeights = w.length > 0 ? w : DEFAULT_SPECIES_WEIGHTS;
+    this.speciesWeightTotal = this.speciesWeights.reduce((s, e) => s + e.weight, 0);
     this.animalHerd = opts.animalHerd
       ? [Math.max(1, opts.animalHerd[0]), Math.max(1, opts.animalHerd[1])]
       : [2, 4];
@@ -188,12 +214,14 @@ export class Spawner {
     return !this.world.isSolid(pos.x, pos.y, pos.z) && !this.world.isSolid(pos.x, pos.y + 1, pos.z);
   }
 
-  /** 物种等权选取（pig/cow/sheep 各 1/3） */
+  /** 物种权重采样：前缀和遍历（区域表至多 ~4 条，线性足够） */
   private pickSpecies(): AnimalSpeciesKey {
-    const r = this.rng();
-    if (r < 1 / SPECIES_COUNT) return 'pig';
-    if (r < 2 / SPECIES_COUNT) return 'cow';
-    return 'sheep';
+    let roll = this.rng() * this.speciesWeightTotal;
+    for (const e of this.speciesWeights) {
+      roll -= e.weight;
+      if (roll < 0) return e.key;
+    }
+    return this.speciesWeights[this.speciesWeights.length - 1]!.key;
   }
 
   /** 群成员采样：群心 ±HERD_SPREAD 整数偏移，y 按 groundY 重算（不做合法性判断，交给调用方） */

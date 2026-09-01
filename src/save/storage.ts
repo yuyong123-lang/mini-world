@@ -51,6 +51,8 @@ export interface SavedGame {
   furnaces: Record<string, FurnaceSnapshot>;
   /** 装备槽（可选）：head/chest 各一格 [物品key, 数量] */
   armor?: { head: [string, number] | null; chest: [string, number] | null };
+  /** 区域 id（可选；区域已编进 seed 前缀，此字段仅供 UI 快速显示） */
+  region?: string;
 }
 
 /**
@@ -68,6 +70,8 @@ export interface SaveSource {
   furnaces?: Record<string, FurnaceSnapshot>;
   /** v2 起可选：装备槽持久化 */
   armor?: { head: [string, number] | null; chest: [string, number] | null };
+  /** v2 起可选：区域 id（冗余于 seed 前缀，供 UI 免解析显示） */
+  region?: string;
 }
 
 /** 落盘的真实结构（架构 §2.9），带版本号顶层字段 */
@@ -80,6 +84,7 @@ interface SavePayload {
   diffs: Record<string, Record<number, number>>;
   furnaces?: Record<string, FurnaceSnapshot>;
   armor?: { head: [string, number] | null; chest: [string, number] | null };
+  region?: string;
 }
 
 /**
@@ -136,6 +141,8 @@ export function saveGame(src: SaveSource, storage?: Storage): boolean {
     inv: serializeInventory(src.inventorySlots),
     diffs: serializeDiffs(src.diffs),
     furnaces: src.furnaces ?? {},
+    armor: src.armor ?? undefined,
+    region: src.region ?? undefined,
   };
 
   try {
@@ -226,6 +233,7 @@ function parsePayload(data: unknown): SavedGame | null {
     diffs: normalizeDiffs(o.diffs),
     furnaces: o.furnaces === undefined ? {} : normalizeFurnaces(o.furnaces),
     armor: parseArmor(o.armor),
+    region: typeof o.region === 'string' ? o.region : undefined,
   };
 }
 

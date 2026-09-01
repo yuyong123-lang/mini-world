@@ -50,6 +50,9 @@ import { FurnaceUI } from './ui/furnaceUI';
 import { ArmorSlots } from './survival/armor';
 import { MenuSystem, viewDistanceToFog } from './ui/menu';
 import { clearSave, hasSave } from './save/storage';
+import { currentRegion } from './data/regions';
+import { makeSeedForRegion } from './data/regions';
+import { showRegionPicker } from './ui/regionPicker';
 import { DayCycle } from './survival/daycycle';
 import { StatsSystem } from './survival/stats';
 import {
@@ -58,8 +61,6 @@ import {
   startAutosave,
   type SaveSource,
 } from './save/storage';
-
-const SEED = 'mini-world-m1';
 
 /**
  * 全局错误显示：任何运行时异常直接打到屏幕上（而非只在 console）。
@@ -92,18 +93,32 @@ function installErrorOverlay(): void {
   });
 }
 
-function boot(): void {
+async function boot(): Promise<void> {
   const bus = new EventBus<GameEvents>();
   const app = document.querySelector<HTMLDivElement>('#app');
   if (!app) throw new Error('#app 容器缺失');
 
   BlockRegistry.load();
   CraftingMatcher.load(recipesJson as never); // crafting.ts 不自动加载，boot 时显式喂入
-  const renderer = new Renderer(app);
 
-  // ---- 读档（若有）：seed 与初始状态来自存档 ----
+  // ---- 读档（若有）：seed 与初始状态来自存档；无档 → 选区流程产生新 seed ----
+  // 选区流程两级：①「切换区域」菜单写入的交接键（选好了直接用，不再弹图）；
+  //              ② 真正的新档 → 弹像素中国地图选区。
   const saved = loadGame();
-  const seed = saved?.seed ?? SEED;
+  let seed = saved?.seed ?? '';
+  if (!seed) {
+    let regionId: ReturnType<typeof consumeNextRegionId> = null;
+    try {
+      regionId = consumeNextRegionId();
+    } catch { /* 隐私模式 localStorage 不可用：回落弹图 */ }
+    if (regionId) {
+      seed = makeSeedForRegion(regionId, Math.random().toString(36).slice(2, 10));
+    } else {
+      seed = makeSeedForRegion(await showRegionPicker(app), Math.random().toString(36).slice(2, 10));
+    }
+  }
+
+  const renderer = new Renderer(app);
 
   // ---- 世界（流式加载中枢，terragen 在其构造器内 init）----
   const world = new World(seed);
@@ -194,6 +209,7 @@ function boot(): void {
   // ---- 昼夜与生存 ----
   // 新世界从正午开始（t=0 是黎明地平线，光照近 0 会一进游戏就摸黑）；读档沿用存档时刻
   const daycycle = new DayCycle(saved?.time ?? DAY_LENGTH * 0.5);
+  daycycle.setRegionSky(currentRegion().atmosphere.sky ?? {}); // 区域天空覆盖（四川雾色等）
   const sky = new SkySystem(renderer, daycycle);
   // 玩家位置：存档优先
   const p0 = saved?.player.p;
@@ -247,13 +263,18 @@ function boot(): void {
   player.setSensitivity(settings.sensitivity);
   document.addEventListener('click', initAudio, { once: true });
   {
-    // 视距生效：雾距按 settings 缩放（World 加载半径热更留待后续版本，当前用常量半径）
+    // 视距生效：雾距按 settings 缩放（World 加载半径热更留待后续版本，当前用常量半径），
+    // 再乘区域氛围系数（四川雾气 0.7 / 新疆通透 1.25）
     const f = viewDistanceToFog(Math.min(settings.viewDistance, 6));
+    const fogScale = currentRegion().atmosphere.fogScale;
     const fog = renderer.scene.fog;
     if (fog && 'near' in fog && 'far' in fog) {
-      fog.near = f.near;
-      fog.far = f.far;
+      fog.near = f.near * fogScale;
+      fog.far = f.far * fogScale;
     }
+    // 区域水色 tint（四川青绿 / 东北暗蓝 / 云南碧色…；generic 无 tint 保持原色）
+    const tint = currentRegion().atmosphere.waterTint;
+    if (tint) renderer.waterMat.color.set(tint);
   }
 
   // ---- 音效事件映射 ----
@@ -265,8 +286,14 @@ function boot(): void {
   // ---- 交互 ----
   player.bind(app);
   // 面板打开期间禁用「点击画面→锁定指针」：保证弹出框里鼠标一直可用，
-  // 选中物品/误点空白都不会被拉回游戏（退出面板走 E 键，退出即自动重锁）
-  player.pointerLockGate = () => invUI.isOpen() || craftUI.isOpen() || furnaceUI.isOpen();
+  // 选中物品/误点空白都不会被拉回游戏（退出面板走 E 键，退出即自动重锁）。
+  // 选区界面（region-picker）也纳入门控——它的像素地图本身就是 <canvas>，
+  // 不挡的话点地图选区域会被误判成「点击游戏画面」而抓走鼠标。
+  player.pointerLockGate = () =>
+    invUI.isOpen() ||
+    craftUI.isOpen() ||
+    furnaceUI.isOpen() ||
+    document.getElementById('region-picker') !== null;
   const interactor = new Interactor(renderer.camera, player, {
     getBlock: (x, y, z) => world.getBlock(x, y, z),
     isSolid: (x, y, z) => world.isSolid(x, y, z),
@@ -528,13 +555,20 @@ function boot(): void {
         head: armorSlots.head ? [armorSlots.head.key, armorSlots.head.count] : null,
         chest: armorSlots.chest ? [armorSlots.chest.key, armorSlots.chest.count] : null,
       },
+      region: currentRegion().id,
     };
   }
 
-  window.addEventListener('beforeunload', () => saveGame(snapshot()));
+  // 卸载保存提取为具名函数：「切换区域」重载前必须摘掉它，否则清档后
+  // beforeunload 又会把旧世界存档写回，重载后读到旧档导致换区失效。
+  const saveNow = (): boolean => saveGame(snapshot());
+  const saveUnloadHandler = (): void => {
+    saveNow();
+  };
+  window.addEventListener('beforeunload', saveUnloadHandler);
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'KeyP') return;
-    hud.showToast(saveGame(snapshot()) ? '已保存' : '保存失败');
+    hud.showToast(saveNow() ? '已保存' : '保存失败');
   });
   startAutosave(() => (document.hidden ? null : snapshot()), 10_000);
 
@@ -546,10 +580,16 @@ function boot(): void {
   const animals: Animal[] = [];
   let animalRespawnTimer = 0; // 动物死亡后的补充延迟倒数（秒）
   const monsters: Monster[] = [];
+  const region = currentRegion();
   const spawner = new Spawner(world, {
     // groundY 约定 = 「可站立脚底 Y」：surfaceHeight 返回地表实心方块 y，需 +1
     // （此前漏 +1 → 采样点恒嵌在草方块里被悬空校验拒绝 → 动物永不刷新）
     groundY: (x, z) => surfaceHeight(x, z) + 1,
+    // 区域物种权重表（四川熊猫/云南大象孔雀/内蒙马群/新疆骆驼/东北虎…）
+    speciesWeights: region.animals,
+    // 区域地面谓词：新疆骆驼可刷在沙上、东北虎刷在雪上
+    spawnAnimalOnGround: (p) =>
+      region.animalGround.includes(BlockRegistry.get(world.getBlock(p.x, p.y - 1, p.z)).key),
   });
   spawner.onSpawnAnimal((pos, speciesKey) => {
     const a = new Animal(pos, { species: ANIMAL_SPECIES[speciesKey] });
@@ -725,11 +765,8 @@ function boot(): void {
     },
     onNewWorld: () => {
       clearSave();
-      // 最干净的换世界方式：清档 + 重置状态 + 换 seed 重载页面
-      // （World 的 worker 通道/初始 diffs 均按 seed 绑定，页面重载最可靠）
-      try {
-        localStorage.setItem('mini_world_next_seed', Math.random().toString(36).slice(2, 10));
-      } catch { /* 隐私模式下忽略，沿用固定 seed */ }
+      // 最干净的换世界方式：清档 + 重载页面。
+      // reload 后无存档 → 启动流程弹出区域选择，选完即产生带区域前缀的新 seed。
       location.reload();
     },
     onRestartWorld: () => {
@@ -738,16 +775,29 @@ function boot(): void {
       void app.requestPointerLock?.();
       hud.showToast('本世界已重新开始');
     },
+    onSwitchRegion: () => {
+      // 随时换地图：弹像素中国地图 → 选定即清档并交接区域 → 重载进新区域世界。
+      // （World 的 worker 通道/diffs 均按 seed 绑定，页面重载是唯一可靠的换世界方式）
+      void showRegionPicker(app).then((regionId) => {
+        // 先摘掉卸载保存：否则 reload 的 beforeunload 会把旧世界存档写回，
+        // 重载后读到旧档直接进旧世界（换区静默失效）。
+        window.removeEventListener('beforeunload', saveUnloadHandler);
+        clearSave();
+        try {
+          localStorage.setItem('my_world_next_region', regionId);
+        } catch { /* 隐私模式：回落到重载后弹图让玩家再选一次 */ }
+        location.reload();
+      });
+    },
     onSaveExit: () => {
       saveGame(snapshot());
       menu.showMain();
     },
   });
 
-  // ---- 启动遮罩：新世界显示欢迎+操作说明；读档玩家不弹遮罩，
-  //      由 pointerlockchange 的常驻提示条引导点击进入 ----
+  // ---- 新世界欢迎提示：区域选择已完成，toast 报到；操作说明在选区面板已展示 ----
   if (!saved) {
-    showFirstRunMask(app, world.spawnPoint);
+    hud.showToast(`欢迎来到「${currentRegion().name}」`);
   }
 
   // 初始快照事件（读档场景让 UI 与存档对齐）
@@ -1223,7 +1273,9 @@ function boot(): void {
     }
   }
 
-  console.log(`[mini-world] M3 就绪 seed=${seed} ${saved ? '(读档)' : '(新世界)'}`);
+  console.log(
+    `[mini-world] M3 就绪 seed=${seed} region=${currentRegion().id} ${saved ? '(读档)' : '(新世界)'}`,
+  );
   // 调试钩子：控制台可直查世界内部状态（诊断 HUD 之外的深挖入口）
   (window as unknown as { __game: object }).__game = {
     world,
@@ -1237,33 +1289,28 @@ function boot(): void {
   };
 }
 
-/** 首次运行提示遮罩：任意键进入并请求指针锁 */
-function showFirstRunMask(app: HTMLElement, spawn: { x: number; y: number; z: number }): void {
-  const mask = document.createElement('div');
-  mask.id = 'first-run-mask';
-  mask.innerHTML =
-    '<div class="mask-card"><h1>迷你世界</h1>' +
-    `<p>出生点 (${Math.round(spawn.x)}, ${Math.round(spawn.y)}, ${Math.round(spawn.z)})</p>` +
-    '<p>WASD 移动 · 空格跳 · 左键挖 · 右键放/吃 · E 背包 · P 保存</p>' +
-    '<button id="start-btn">开始游戏</button></div>';
-  app.appendChild(mask);
-  const style = document.createElement('style');
-  style.textContent = `
-#first-run-mask{position:fixed;inset:0;z-index:50;background:rgba(8,10,16,.82);display:flex;
-  align-items:center;justify-content:center}
-#first-run-mask .mask-card{text-align:center;color:#fff;font-family:sans-serif}
-#first-run-mask h1{font-size:42px;margin-bottom:12px}
-#first-run-mask button{font-size:18px;padding:10px 34px;border-radius:6px;border:0;cursor:pointer;
-  background:#ffd75e;color:#333;font-weight:bold}
-`;
-  style.id = 'first-run-style';
-  document.head.appendChild(style);
-  mask.querySelector('#start-btn')?.addEventListener('click', () => {
-    mask.remove();
-    document.getElementById('first-run-style')?.remove();
-    void document.querySelector<HTMLElement>('#app')?.requestPointerLock?.();
-  });
+/**
+ * 「切换区域」跨页面交接：读取并清除菜单写入的下次启动区域 id。
+ * @returns 区域 id（合法枚举值），无键/非法值/存储不可用返回 null（boot 回落弹图）
+ */
+function consumeNextRegionId(): import('./data/regions').RegionId | null {
+  const KEY = 'my_world_next_region';
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    localStorage.removeItem(KEY);
+  } catch { /* 删不掉也无妨：下次读档流程会覆盖 */ }
+  // 非法值一律回落 null（regionIdFromSeed 同款防御；这里手写避免 import REGIONS 表）
+  const VALID: ReadonlySet<string> = new Set([
+    'sichuan', 'beijing', 'yunnan', 'neimenggu', 'xinjiang', 'dongbei',
+  ]);
+  return VALID.has(raw) ? (raw as import('./data/regions').RegionId) : null;
 }
 
 installErrorOverlay();
-boot();
+void boot();

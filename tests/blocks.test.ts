@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { BLOCK, BlockRegistry } from '../src/blocks/registry';
 
 describe('方块注册表', () => {
-  it('加载 21 种方块', () => {
-    expect(BlockRegistry.count()).toBe(21);
+  it('加载 37 种方块', () => {
+    expect(BlockRegistry.count()).toBe(37);
   });
 
   it('get/byKey 双向查表', () => {

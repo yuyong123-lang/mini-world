@@ -12,7 +12,16 @@
 
 import { createNoise2D } from 'simplex-noise';
 
+import { initRegionFromSeed, currentTerrain, type TreeKind } from '../data/regions';
 import { BLOCK } from '../blocks/registry';
+import {
+  MAX_STRUCT_RADIUS,
+  STRUCT_CELL,
+  anchorSuitable,
+  insideStructureFootprint,
+  stampStructure,
+  structureAnchor,
+} from './structures';
 import { CHUNK_W, SEA_LEVEL, WORLD_H, voxelIndex } from '../core/constants';
 import { hash2, hash3, hashStr, mulberry32 } from '../core/rng';
 
@@ -40,32 +49,28 @@ interface NoiseSet {
 /** 模块级噪声状态；null 表示尚未 initTerrain（抛错提示，而非静默输出空地形） */
 let noises: NoiseSet | null = null;
 
-// ---- 地形参数（调参只动这里）----
+// ---- 地形参数（调参只动这里；振幅/基准已区域化，见 data/regions.ts）----
 const CONT_FREQ = 0.004;      // 大陆层基频：波长约 250 格（architecture §2.4）
 const CONT_OCTAVES = 3;       // 文档写 4；实现取 3 层 fbm（任务卡允许 2~3 层简化）
 const HILLS_FREQ = 0.02;      // 丘陵层基频：波长约 50 格
 const HILLS_OCTAVES = 2;      // 丘陵 fbm 层数
 const RIDGE_FREQ = 0.01;      // 山脊层频率：波长约 100 格
 const RIDGE_EXP = 1.6;        // ridge 幂次：>1 让脊线更尖锐
-const RIDGE_AMP = 26;         // 山脊层最大抬升（格）
 const RIDGE_MASK_LO = 0.25;   // 平滑阶梯下缘：低于此 cont 值无山（沿海平原）
 const RIDGE_MASK_HI = 0.65;   // 平滑阶梯上缘：高于此 cont 值山体全高
 const TEMP_FREQ = 0.0015;     // 温度场频率：气候区跨度约 600 格
-const BASE_OFFSET = 4;        // 公式常数项：SEA_LEVEL + 4 为平均海平面以上基准
 
 const MIN_HEIGHT = 3;             // 地表高度下限（保证基岩上方至少 2 层土）
 const MAX_HEIGHT = WORLD_H - 10;  // 地表高度上限（54，给树冠留 7 格）
 
-// ---- 生物群系阈值 ----
+// ---- 生物群系阈值（区域可用 bias 偏移）----
 const DESERT_TEMP = 0.55;      // temp > 此值且海拔够 → 沙漠
 const SNOW_TEMP = -0.55;       // temp < 此值 或 海拔够高 → 雪原
 const SNOW_ALTITUDE = 52;      // 雪线的海拔触发值
 
-// ---- 树参数 ----
-const TREE_CHANCE = 0.009;     // 每草地列约 1/111 概率成树
+// ---- 树参数（密度/群系已区域化；几何常量仍全局）----
 const TREE_SALT = 7919;        // 树干高度哈希的偏移盐，避免与密度哈希同相
-const CANOPY_R = 2;            // 叶冠最大水平半径 → 跨 chunk 扫描边距
-const CAP_R = 1;               // 干顶上一层的小叶盘半径
+const CANOPY_R = 2;            // 叶冠最大水平半径 → 跨 chunk 扫描边距（所有树种硬上限）
 
 // ---- 矿石参数：深度区间与命中概率（architecture §2.4 / 任务卡阈值）----
 const COAL_MIN = 8, COAL_MAX = 48, COAL_P = 0.012;
@@ -119,6 +124,9 @@ export function initTerrain(seed: string): void {
     (((rng() * 0x100000000) >>> 0) ^ 0x51ab3f77) >>> 0;
   const temp = createNoise2D(mulberry32(tempSeed));
   noises = { cont, hills, ridge, temp };
+  // 区域状态随 seed 同步解析（cn_<id>_ 前缀 → 活动区域；无前缀=generic）。
+  // 主线程与 Worker 各自 init 时即完成区域同步，Worker 协议无需携带 region。
+  initRegionFromSeed(seed);
 }
 
 /** 取已初始化的噪声集；未初始化直接抛错（Worker 中必须先 init 再 generate） */
@@ -131,39 +139,50 @@ function requireNoises(): NoiseSet {
   return noises;
 }
 
-/** 单列原始温度（[-1,1]），生物群系判定与调试共用 */
+/** 单列原始温度（[-1,1] + 区域偏置），生物群系判定与调试共用 */
 function temperatureAt(n: NoiseSet, x: number, z: number): number {
-  return n.temp(x * TEMP_FREQ, z * TEMP_FREQ);
+  return n.temp(x * TEMP_FREQ, z * TEMP_FREQ) + currentTerrain().tempBias;
 }
 
 /**
  * 单列的原始地表高度（不含水修正），生成与查询共用同一条公式：
- *   h = SEA_LEVEL + 4 + cont*6 + hills*3 + ridge^1.6 × smoothstep(.25,.65,cont) × 26
+ *   h = SEA_LEVEL + baseOffset + cont×contAmp + hills×hillsAmp
+ *       + ridge^1.6 × smoothstep(.25,.65,cont) × ridgeAmp
+ * 各振幅与基准来自活动区域参数（generic 区域 = 历史常量 4/6/3/26）；
+ * 区域可开梯田量化（terraceStep，云南=4）。
  * 取整后钳制到 [MIN_HEIGHT, MAX_HEIGHT]。
  */
 function terrainHeight(n: NoiseSet, x: number, z: number): number {
+  const R = currentTerrain();
   const cont = fbm(n.cont, x * CONT_FREQ, z * CONT_FREQ);
   const hills = fbm(n.hills, x * HILLS_FREQ, z * HILLS_FREQ);
   // 山脊 ∈ [0,1]：|noise| 的谷即山脊线，天然成「脊」而非「丘」
   const ridge = 1 - Math.abs(n.ridge(x * RIDGE_FREQ, z * RIDGE_FREQ));
   const mask = smoothstep(RIDGE_MASK_LO, RIDGE_MASK_HI, cont);
-  const raw =
+  let raw =
     SEA_LEVEL +
-    BASE_OFFSET +
+    R.baseOffset +
     Math.floor(
-      cont * 6 +
-        hills * 3 +
-        Math.pow(ridge, RIDGE_EXP) * mask * RIDGE_AMP,
+      cont * R.contAmp +
+        hills * R.hillsAmp +
+        Math.pow(ridge, RIDGE_EXP) * mask * R.ridgeAmp,
     );
+  // 梯田量化：以海平面为基准按步长取整（山地梯田的阶梯轮廓）
+  if (R.terraceStep > 0) {
+    raw = SEA_LEVEL + Math.floor((raw - SEA_LEVEL) / R.terraceStep) * R.terraceStep;
+  }
   // 钳制到安全区间，保证基岩/表层不越界且不互相重叠
   return raw < MIN_HEIGHT ? MIN_HEIGHT : raw > MAX_HEIGHT ? MAX_HEIGHT : raw;
 }
 
 /** 由 (高度, 温度) 推出陆地群系（水下列仍返回气候值，表层覆盖在 fillColumn 处理） */
 function biomeOf(h: number, temp: number): BiomeKind {
+  const R = currentTerrain();
+  // 全图强制群系（内蒙=草原 / 东北=雪原）；水下表层覆盖仍在 fillColumn 处理
+  if (R.forceBiome) return R.forceBiome;
   // 沙漠优先于雪原（文档判定顺序）：炎热高山是沙漠不是雪原
-  if (temp > DESERT_TEMP && h > SEA_LEVEL + 1) return 'desert';
-  if (temp < SNOW_TEMP || h > SNOW_ALTITUDE) return 'snow';
+  if (temp > DESERT_TEMP + R.desertBias && h > SEA_LEVEL + 1) return 'desert';
+  if (temp < SNOW_TEMP + R.snowBias || h > SNOW_ALTITUDE) return 'snow';
   return 'grass';
 }
 
@@ -179,15 +198,39 @@ export function biomeAt(x: number, z: number): BiomeKind {
 
 /**
  * 树干所在列的确定性判定：
- *   稀疏哈希命中（约 1/111 草地列）且该列为草地、海拔高于海平面 +1。
- * 沙漠/雪原/水下列不长树；两处判据完全由世界坐标决定 → 与 chunk 无关。
+ *   稀疏哈希命中（区域树密度）且该列群系在区域允许列表、海拔高于海平面 +1。
+ * 判据完全由世界坐标决定 → 与 chunk 无关。
  */
 export function isTreeColumn(x: number, z: number): boolean {
-  if (hash2(x, z) >= TREE_CHANCE) return false;
+  const R = currentTerrain();
+  if (hash2(x, z) >= R.treeChance) return false;
+  // 结构 footprint（含余量）内压树：树不长进建筑里。
+  // 放在密度哈希之后 → 仅 ~1% 列付出 footprint 查询成本。
+  if (R.structures.length > 0 && insideStructureFootprint(x, z, R.structures)) return false;
   const n = requireNoises();
   const h = terrainHeight(n, x, z);
   if (h <= SEA_LEVEL + 1) return false;
-  return biomeOf(h, temperatureAt(n, x, z)) === 'grass';
+  return R.treeOnBiomes.includes(biomeOf(h, temperatureAt(n, x, z)));
+}
+
+/** 树种哈希的偏移盐：与密度判定流独立，避免同相 */
+const TREE_KIND_SALT = 0x9e3779b9;
+
+/**
+ * 树列的树种：按区域树表权重 roll（第二路独立哈希流）。
+ * 只在 isTreeColumn 命中的列上调用；单元素表走快路径。
+ */
+function treeKindAt(x: number, z: number): TreeKind {
+  const kinds = currentTerrain().treeKinds;
+  if (kinds.length === 1) return kinds[0].kind;
+  let total = 0;
+  for (const k of kinds) total += k.weight;
+  let roll = hash2(x + TREE_KIND_SALT, z - TREE_KIND_SALT) * total;
+  for (const k of kinds) {
+    roll -= k.weight;
+    if (roll < 0) return k.kind;
+  }
+  return kinds[kinds.length - 1].kind;
 }
 
 /** 树干高度（格）：4~6，由该列坐标的另一路哈希确定 */
@@ -197,11 +240,12 @@ function trunkHeightAt(tx: number, tz: number): number {
 
 /**
  * 在本 chunk 数据里写入一棵树落在 chunk 内的部分（log 优先于叶）。
- * 写入规则：
- *   LOG   仅覆盖 AIR / LEAVES（树干穿透邻近树冠，不被叶挡住）
- *   LEAVES 仅写入 AIR（不啃玩家地形、不覆盖其他结构）
- * 两棵树的叶互相覆盖结果相同（同 id），LOG 与叶相遇无论先后都得到 LOG
+ * 写入规则（对任意 logId/leafId 成立）：
+ *   干   仅覆盖 AIR / 任意叶（树干穿透邻近树冠，不被叶挡住）
+ *   叶   仅写入 AIR（不啃玩家地形、不覆盖其他结构）
+ * 同种方块互相覆盖结果相同（同 id），干与叶相遇无论先后都得到干
  * → 规则合流，遍历顺序不影响最终数据，跨 chunk 一致性因此成立。
+ * 全部树种的叶冠水平半径 ≤ CANOPY_R=2（扩展网格边距的硬前提）。
  */
 function stampTree(
   data: Uint8Array,
@@ -210,9 +254,11 @@ function stampTree(
   tx: number,
   tz: number,
   groundH: number,
+  kind: TreeKind,
 ): void {
+  /** 各树种使用的干/叶方块 id */
+  const mat = TREE_MATERIAL[kind];
   const trunkLen = trunkHeightAt(tx, tz);
-  const topY = groundH + trunkLen;
 
   const putLog = (wx: number, y: number, wz: number): void => {
     const lx = wx - baseX;
@@ -220,8 +266,7 @@ function stampTree(
     if (lx < 0 || lx >= CHUNK_W || lz < 0 || lz >= CHUNK_W) return;
     if (y < 1 || y >= WORLD_H) return;
     const i = voxelIndex(lx, y, lz);
-    const cur = data[i];
-    if (cur === BLOCK.AIR || cur === BLOCK.LEAVES) data[i] = BLOCK.LOG;
+    if (data[i] === BLOCK.AIR || OPAQUE_LIKE.has(data[i])) data[i] = mat.log;
   };
   const putLeaf = (wx: number, y: number, wz: number): void => {
     const lx = wx - baseX;
@@ -229,28 +274,111 @@ function stampTree(
     if (lx < 0 || lx >= CHUNK_W || lz < 0 || lz >= CHUNK_W) return;
     if (y < 1 || y >= WORLD_H) return;
     const i = voxelIndex(lx, y, lz);
-    if (data[i] === BLOCK.AIR) data[i] = BLOCK.LEAVES;
+    if (data[i] === BLOCK.AIR) data[i] = mat.leaf;
   };
-
-  // 树干：地表上方 1..trunkLen
-  for (let dy = 1; dy <= trunkLen; dy++) putLog(tx, groundH + dy, tz);
-
-  // 叶冠：干顶两层半径 2 叶盘（切去四角呈圆形轮廓）+ 顶上一层半径 1
-  for (let dy = -1; dy <= 1; dy++) {
-    const y = topY + dy;
-    const r = dy <= 0 ? CANOPY_R : CAP_R;
+  /** 圆形叶盘：半径 r，去四角（r=2 时）；cutCenter=false 时跳过中轴（干所在格） */
+  const putDisc = (y: number, r: number, keepCenter: boolean): void => {
     for (let dx = -r; dx <= r; dx++) {
       for (let dz = -r; dz <= r; dz++) {
-        // 半径 2 层去掉四角，更接近经典橡树叶球
-        if (r === CANOPY_R && dx !== 0 && dz !== 0 && Math.abs(dx) === CANOPY_R &&
-            Math.abs(dz) === CANOPY_R) {
+        if (r === CANOPY_R && dx !== 0 && dz !== 0 && Math.abs(dx) === r && Math.abs(dz) === r) {
           continue;
         }
+        if (!keepCenter && dx === 0 && dz === 0) continue;
         putLeaf(tx + dx, y, tz + dz);
       }
     }
+  };
+
+  switch (kind) {
+    // ---- 竹：细高竹竿 + 顶部小叶盘（四川）----
+    case 'bamboo': {
+      const h = 3 + Math.floor(hash2(tx - TREE_SALT, tz) * 3); // 3..5
+      for (let dy = 1; dy <= h; dy++) putLog(tx, groundH + dy, tz);
+      putDisc(groundH + h, 1, false); // 顶层十字叶
+      putLeaf(tx, groundH + h + 1, tz); // 顶尖一格
+      // 中部侧叶（确定性单点）：让竹丛更茂密
+      if (h >= 4) putLeaf(tx + 1, groundH + h - 1, tz);
+      if (h >= 5) putLeaf(tx, groundH + h - 2, tz + 1);
+      break;
+    }
+    // ---- 云杉：锥形塔（东北针叶林）----
+    case 'spruce': {
+      const h = 4 + Math.floor(hash2(tx - TREE_SALT, tz) * 3); // 4..6
+      const top = groundH + h;
+      for (let dy = 1; dy <= h; dy++) putLog(tx, groundH + dy, tz);
+      putDisc(top - 2, 2, false);
+      putDisc(top - 1, 2, false);
+      putDisc(top, 1, false);
+      putLeaf(tx, top + 1, tz); // 尖顶
+      break;
+    }
+    // ---- 胡杨：金黄椭圆冠（新疆绿洲）----
+    case 'poplar': {
+      const top = groundH + trunkLen;
+      for (let dy = 1; dy <= trunkLen; dy++) putLog(tx, groundH + dy, tz);
+      putDisc(top - 1, 2, false);
+      putDisc(top, 2, false);
+      putDisc(top + 1, 1, true);
+      break;
+    }
+    // ---- 棕榈/芭蕉科：高干 + 顶部放射大叶（云南）----
+    case 'palm': {
+      const h = 3 + Math.floor(hash2(tx - TREE_SALT, tz) * 2); // 3..4
+      const top = groundH + h;
+      for (let dy = 1; dy <= h; dy++) putLog(tx, groundH + dy, tz);
+      putLeaf(tx, top + 1, tz); // 中心
+      // 四条水平臂：方向 × 2 格，末端下垂一格
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        putLeaf(tx + dx, top + 1, tz + dz);
+        putLeaf(tx + dx * 2, top, tz + dz * 2);
+      }
+      break;
+    }
+    // ---- 茶树：矮冠灌丛（云南茶园）----
+    case 'tea': {
+      putLog(tx, groundH + 1, tz); // 一格短干
+      putDisc(groundH + 2, 2, false);
+      putDisc(groundH + 3, 1, true);
+      break;
+    }
+    // ---- 芭蕉：短干 + 宽大双层叶冠（云南）----
+    case 'banana': {
+      for (let dy = 1; dy <= 2; dy++) putLog(tx, groundH + dy, tz);
+      putDisc(groundH + 3, 2, false);
+      putDisc(groundH + 4, 1, true);
+      break;
+    }
+    // ---- 国槐：矮干宽冠（北京行道树）；橡树：经典球冠 ----
+    case 'pagoda':
+    case 'oak':
+    default: {
+      const top = groundH + (kind === 'pagoda' ? 3 + Math.floor(hash2(tx - TREE_SALT, tz) * 2) : trunkLen);
+      for (let dy = 1; dy <= top - groundH; dy++) putLog(tx, groundH + dy, tz);
+      putDisc(top - 1, 2, true); // 含中轴：干顶同层两侧是叶
+      putDisc(top, 2, false);
+      putDisc(top + 1, 1, true);
+      break;
+    }
   }
 }
+
+/** 树种 → 干/叶方块 id（Phase 3 注册的区域方块） */
+const TREE_MATERIAL: Readonly<Record<TreeKind, { log: number; leaf: number }>> = {
+  oak: { log: BLOCK.LOG, leaf: BLOCK.LEAVES },
+  pagoda: { log: BLOCK.LOG, leaf: BLOCK.LEAVES },
+  bamboo: { log: BLOCK.BAMBOO, leaf: BLOCK.BAMBOO_LEAF },
+  spruce: { log: BLOCK.SPRUCE_LOG, leaf: BLOCK.SPRUCE_LEAVES },
+  poplar: { log: BLOCK.LOG, leaf: BLOCK.POPLAR_LEAVES },
+  palm: { log: BLOCK.LOG, leaf: BLOCK.PALM_LEAF },
+  tea: { log: BLOCK.LOG, leaf: BLOCK.TEA_LEAVES },
+  banana: { log: BLOCK.LOG, leaf: BLOCK.PALM_LEAF },
+};
+
+/** 叶类（可被干穿透）的方块集合：putLog 判定用——只让干穿过叶与空气 */
+const OPAQUE_LIKE: ReadonlySet<number> = new Set([
+  BLOCK.LEAVES, BLOCK.BAMBOO_LEAF, BLOCK.SPRUCE_LEAVES,
+  BLOCK.POPLAR_LEAVES, BLOCK.PALM_LEAF, BLOCK.TEA_LEAVES,
+]);
 
 /**
  * 单个 STONE 体素的矿石替换判定：金 > 铁 > 煤（倒序 early exit）。
@@ -276,12 +404,12 @@ function oreAt(wx: number, y: number, wz: number): number {
 
 /**
  * 填充一整列体素（data 中该列步长 = 1<<8，逐层 +STEP_Y 写入）。
- * 分层规则（architecture §2.4）：
+ * 分层规则（architecture §2.4，表层/次表层方块按区域表查询）：
  *   y=0            BEDROCK
  *   y <  h-3       STONE（按深度区间可能被矿石替换）
- *   h-3 .. h-1     沙漠/水下=SAND，其余=DIRT
- *   y = h          陆上按群系 GRASS/SAND/SNOW；水下恒 SAND
- *   h < SEA_LEVEL 时 (h, SEA_LEVEL] 填 WATER；更高保持 AIR
+ *   h-3 .. h-1     区域 sub（沙漠/水下沿用历史语义恒 SAND）
+ *   y = h          水下恒 SAND；陆上按群系查区域 surface 表
+ *   h < SEA_LEVEL 时 (h, SEA_LEVEL] 填 WATER；区域可替换顶层（东北=ICE）
  */
 function fillColumn(
   data: Uint8Array,
@@ -292,16 +420,14 @@ function fillColumn(
   h: number,
   biome: BiomeKind,
 ): void {
+  const R = currentTerrain();
   // 基岩底层
   data[voxelIndex(lx, 0, lz)] = BLOCK.BEDROCK;
-  // 表层方块：淹没列用沙（海滩/河床），陆上按群系
-  const topBlock =
-    h < SEA_LEVEL ? BLOCK.SAND
-      : biome === 'desert' ? BLOCK.SAND
-        : biome === 'snow' ? BLOCK.SNOW
-          : BLOCK.GRASS;
-  // 次表层层：沙漠与水下都用沙垫底，其余泥土
-  const subBlock = h < SEA_LEVEL || biome === 'desert' ? BLOCK.SAND : BLOCK.DIRT;
+  // 表层方块：淹没列用沙（海滩/河床），陆上按区域表
+  const topBlock = h < SEA_LEVEL ? BLOCK.SAND : R.surfaceTop[biome];
+  // 次表层：沙漠与水下都用沙垫底，其余查区域表
+  const subBlock =
+    h < SEA_LEVEL || biome === 'desert' ? R.surfaceSub.desert : R.surfaceSub[biome];
   // 逐层写入 1..h：石/矿(h-4 及以下)、次表层(h-3..h-1)、表层(h)
   for (let y = 1; y <= h && y < WORLD_H; y++) {
     let id: number;
@@ -318,6 +444,10 @@ function fillColumn(
   if (h < SEA_LEVEL) {
     for (let wy = h + 1; wy <= SEA_LEVEL; wy++) {
       data[voxelIndex(lx, wy, lz)] = BLOCK.WATER;
+    }
+    // 区域水面顶层替换（东北湖面结冰）
+    if (R.waterTopBlock !== null) {
+      data[voxelIndex(lx, SEA_LEVEL, lz)] = R.waterTopBlock;
     }
   }
 }
@@ -336,6 +466,7 @@ export function createChunkData(cx: number, cz: number): Uint8Array {
   const baseZ = cz * CHUNK_W;
 
   // --- ① 扩展网格缓存：负边距保证「邻 chunk 的树冠伸进来」也能算到 ---
+  const R = currentTerrain();
   const m = CHUNK_W + MARGIN * 2;
   const extH = new Int16Array(m * m);
   const extBiome = new Uint8Array(m * m); // 0 grass / 1 desert / 2 snow
@@ -349,10 +480,10 @@ export function createChunkData(cx: number, cz: number): Uint8Array {
       const idx = ex * m + ez;
       extH[idx] = h;
       extBiome[idx] = biome === 'desert' ? 1 : biome === 'snow' ? 2 : 0;
-      // 树干判定：稀疏哈希 + 草地 + 海拔条件（与 isTreeColumn 完全同式）
+      // 树干判定：区域密度哈希 + 区域允许群系 + 海拔条件（与 isTreeColumn 完全同式）
       extTree[idx] =
-        hash2(wx, wz) < TREE_CHANCE &&
-        biome === 'grass' &&
+        hash2(wx, wz) < R.treeChance &&
+        R.treeOnBiomes.includes(biome) &&
         h > SEA_LEVEL + 1
           ? 1
           : 0;
@@ -376,7 +507,39 @@ export function createChunkData(cx: number, cz: number): Uint8Array {
     const wx = baseX - MARGIN + ex;
     for (let ez = 0; ez < m; ez++) {
       if (extTree[ex * m + ez] !== 1) continue;
-      stampTree(data, baseX, baseZ, wx, baseZ - MARGIN + ez, extH[ex * m + ez]);
+      const wz = baseZ - MARGIN + ez;
+      stampTree(data, baseX, baseZ, wx, wz, extH[ex * m + ez], treeKindAt(wx, wz));
+    }
+  }
+
+  // --- ④ 结构：扫描覆盖本 chunk ±MAX_STRUCT_RADIUS 的候选 cell（≤3×3），
+  //        命中锚点先校验地形再 stamp。树先于结构落块 → 结构 overwrite 可清出
+  //        侵入 footprint 的树体；put 闭包只写本 chunk 且永不覆盖基岩。
+  if (R.structures.length > 0) {
+    const put = (wx: number, y: number, wz: number, id: number, overwrite: boolean): void => {
+      const lx = wx - baseX;
+      const lz = wz - baseZ;
+      if (lx < 0 || lx >= CHUNK_W || lz < 0 || lz >= CHUNK_W) return;
+      if (y < 1 || y >= WORLD_H) return;
+      const i = voxelIndex(lx, y, lz);
+      const cur = data[i];
+      if (cur === BLOCK.BEDROCK) return;
+      if (!overwrite && cur !== BLOCK.AIR) return;
+      data[i] = id;
+    };
+    const heightAt = (x: number, z: number): number => terrainHeight(n, x, z);
+    const c0x = Math.floor((baseX - MAX_STRUCT_RADIUS) / STRUCT_CELL);
+    const c1x = Math.floor((baseX + CHUNK_W - 1 + MAX_STRUCT_RADIUS) / STRUCT_CELL);
+    const c0z = Math.floor((baseZ - MAX_STRUCT_RADIUS) / STRUCT_CELL);
+    const c1z = Math.floor((baseZ + CHUNK_W - 1 + MAX_STRUCT_RADIUS) / STRUCT_CELL);
+    for (let cellX = c0x; cellX <= c1x; cellX++) {
+      for (let cellZ = c0z; cellZ <= c1z; cellZ++) {
+        for (const s of R.structures) {
+          const a = structureAnchor(cellX, cellZ, s.kind, s.cellDensity);
+          if (!a || !anchorSuitable(a, s.kind, heightAt)) continue;
+          stampStructure(s.kind, a.x, a.z, heightAt(a.x, a.z) + 1, heightAt, put);
+        }
+      }
     }
   }
 

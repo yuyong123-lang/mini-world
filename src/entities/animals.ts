@@ -80,8 +80,58 @@ export function sheepDrops(_roll: number): ItemStack[] {
   ];
 }
 
+// ---- 中国区域物种掉落（掉落键见 items.json 区域扩展段）----
+
+/** 大熊猫：保护动物，击杀无收益（掉落为空） */
+export function pandaDrops(_roll: number): ItemStack[] {
+  return [];
+}
+
+/** 大象：生牛肉 3 + 皮革 2（大体型高产出） */
+export function elephantDrops(_roll: number): ItemStack[] {
+  return [
+    { key: 'ITEM_RAW_BEEF', count: 3 },
+    { key: 'ITEM_LEATHER', count: 2 },
+  ];
+}
+
+/** 孔雀：羽毛 2 + 生猪肉 1 */
+export function peacockDrops(_roll: number): ItemStack[] {
+  return [
+    { key: 'ITEM_FEATHER', count: 2 },
+    { key: 'ITEM_RAW_PORK', count: 1 },
+  ];
+}
+
+/** 马：皮革 2 */
+export function horseDrops(_roll: number): ItemStack[] {
+  return [{ key: 'ITEM_LEATHER', count: 2 }];
+}
+
+/** 骆驼：生羊肉 2 + 牛奶 1（驼奶以牛奶物品表达） */
+export function camelDrops(_roll: number): ItemStack[] {
+  return [
+    { key: 'ITEM_RAW_MUTTON', count: 2 },
+    { key: 'ITEM_MILK', count: 1 },
+  ];
+}
+
+/** 东北虎：生猪排 3（v1 走被动 flee 系统，无主动攻击） */
+export function tigerDrops(_roll: number): ItemStack[] {
+  return [{ key: 'ITEM_RAW_PORK', count: 3 }];
+}
+
 /** 物种逻辑名（ANIMAL_SPECIES 表键 / Spawner 回调载荷） */
-export type AnimalSpeciesKey = 'pig' | 'cow' | 'sheep';
+export type AnimalSpeciesKey =
+  | 'pig'
+  | 'cow'
+  | 'sheep'
+  | 'panda'
+  | 'elephant'
+  | 'peacock'
+  | 'horse'
+  | 'camel'
+  | 'tiger';
 
 /**
  * 物种定义：纯数据驱动的多物种支持（猪/牛/羊共用同一套三态状态机，
@@ -139,6 +189,73 @@ export const ANIMAL_SPECIES: Readonly<Record<AnimalSpeciesKey, AnimalSpeciesDef>
     fleeSpeed: 2.2,
     viewColor: 0xe8e4dc,
     drops: sheepDrops,
+  },
+  // ---- 中国区域物种（四川/云南/内蒙古/新疆/东北）----
+  panda: {
+    key: 'panda',
+    name: '大熊猫',
+    maxHp: 16,
+    width: 0.9,
+    height: 1.0,
+    wanderSpeed: 0.8,
+    fleeSpeed: 1.6,
+    viewColor: 0xf0f0f0,
+    drops: pandaDrops,
+  },
+  elephant: {
+    key: 'elephant',
+    name: '大象',
+    maxHp: 30,
+    width: 1.4,
+    height: 2.2,
+    wanderSpeed: 0.9,
+    fleeSpeed: 1.8,
+    viewColor: 0x9a9a9a,
+    drops: elephantDrops,
+  },
+  peacock: {
+    key: 'peacock',
+    name: '孔雀',
+    maxHp: 6,
+    width: 0.5,
+    height: 0.8,
+    wanderSpeed: 1.4,
+    fleeSpeed: 2.8,
+    viewColor: 0x2a5a9a,
+    drops: peacockDrops,
+  },
+  horse: {
+    key: 'horse',
+    name: '马',
+    maxHp: 18,
+    width: 0.9,
+    height: 1.5,
+    wanderSpeed: 2.2,
+    fleeSpeed: 3.0,
+    viewColor: 0x8a5a30,
+    drops: horseDrops,
+  },
+  camel: {
+    key: 'camel',
+    name: '骆驼',
+    maxHp: 22,
+    width: 1.0,
+    height: 1.9,
+    wanderSpeed: 1.0,
+    fleeSpeed: 2.0,
+    viewColor: 0xc8a860,
+    drops: camelDrops,
+  },
+  tiger: {
+    key: 'tiger',
+    name: '东北虎',
+    maxHp: 30,
+    width: 0.9,
+    height: 1.0,
+    wanderSpeed: 1.5,
+    fleeSpeed: 3.2,
+    viewColor: 0xd8842a,
+    drops: tigerDrops,
   },
 };
 

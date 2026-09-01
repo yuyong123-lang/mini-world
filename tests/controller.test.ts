@@ -213,3 +213,62 @@ describe('PlayerController 状态逻辑（无 DOM 部分）', () => {
     expect(p.hunger).toBe(20); // FIXME(W6)：hunger 未接入冲刺条件
   });
 });
+
+describe('游泳物理：默认漂浮在水面', () => {
+  /** 水世界 stub：y<=0 实心水底，y 1..4 为水，y 5+ 空气 */
+  class WaterWorld {
+    isSolid(_x: number, y: number, _z: number): boolean { return y <= 0; }
+    isLiquid(_x: number, y: number, _z: number): boolean { return y >= 1 && y <= 4; }
+  }
+
+  it('全身没入水中且不按键：浮力使竖直速度转向上浮，绝不持续沉底', () => {
+    const p = new PlayerController({ x: 0, y: 2, z: 0 });
+    const w: never = new WaterWorld() as never;
+    p.vel = { x: 0, y: -5, z: 0 }; // 模拟坠入水中的下坠余速
+    p.tick(1 / 60, w);
+    expect(p.inWater).toBe(true);
+    for (let i = 0; i < 120; i++) p.tick(1 / 60, w); // 漂 2 秒
+    expect(p.vel.y).toBeGreaterThan(0); // 浮力接管：正在向上
+  });
+
+  it('浮到水面后（眼睛出水）转为弱重力轻微回落 → 水面软平衡', () => {
+    // pos.y=3.6 → 眼 5.22（floor=5，空气）→ 弱重力分支
+    const p = new PlayerController({ x: 0, y: 3.6, z: 0 });
+    const w: never = new WaterWorld() as never;
+    p.vel = { x: 0, y: 1.5, z: 0 };
+    p.tick(1 / 60, w);
+    expect(p.vel.y).toBeLessThan(1.5); // 被弱重力 + 阻尼压回，不会蹿上天
+    expect(p.inWater).toBe(true); // 身体仍在水中（脚部样本在水）
+  });
+
+  it('按住空格：上浮速度远大于自然浮力（可蹿出水面）；按住 Shift：转为下潜', () => {
+    const w: never = new WaterWorld() as never;
+    // 采样前 24 帧（0.4s）内的最大上浮速度——之后按空格者会蹿出水面进入空中，属正常行为
+    const peakUp = (keys: string[]): number => {
+      const p = new PlayerController({ x: 0, y: 2, z: 0 });
+      for (const k of keys) p.setKey(k, true);
+      let peak = -Infinity;
+      for (let i = 0; i < 24; i++) {
+        p.tick(1 / 60, w);
+        peak = Math.max(peak, p.vel.y);
+        if (!p.inWater) break; // 出水即停止采样
+      }
+      return peak;
+    };
+    expect(peakUp(['Space'])).toBeGreaterThan(peakUp([]) + 2); // 空格显著快于自然浮力
+    const pDown = new PlayerController({ x: 0, y: 2, z: 0 });
+    pDown.setKey('ShiftLeft', true);
+    for (let i = 0; i < 60; i++) pDown.tick(1 / 60, w);
+    expect(pDown.pos.y).toBeLessThanOrEqual(1); // 持续下潜到底
+  });
+
+  it('回归保护：无 isLiquid 注入的旧 world stub 不触发浮力（保持全重力）', () => {
+    class SolidOnlyWorld {
+      isSolid(_x: number, _y: number, _z: number): boolean { return false; }
+    }
+    const p = new PlayerController({ x: 0, y: 40, z: 0 });
+    p.tick(1 / 60, new SolidOnlyWorld() as never);
+    expect(p.inWater).toBe(false);
+    expect(p.vel.y).toBeLessThan(-0.3); // 全重力生效
+  });
+});
