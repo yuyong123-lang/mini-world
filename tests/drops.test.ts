@@ -351,4 +351,86 @@ describe('DropEntity 高差拾取', () => {
     expect(d.dead).toBe(true);
   });
 
+  it('玩家在掉落物上方 2 格（水底/深坑场景）：磁吸垂直放宽后可吸回并拾取', () => {
+    const p = vec(0, SURFACE, 0);
+    const b = makeCtx(p);
+    // 掉落物在玩家脚底下方 2 格：旧 MAGNET_RADIUS(1.5) 垂直判定下永远够不着
+    const d = spawn(b.ctx, b.entities, vec(p.x + 0.2, SURFACE - 2, p.z), { key: 'ITEM_DIRT', count: 1 });
+
+    advance(b, 120);
+    expect(b.pickup.calls.length).toBeGreaterThanOrEqual(1);
+    expect(d.dead).toBe(true);
+  });
+
+});
+
+// ---------------------------------------------------------------------------
+
+describe('DropEntity 水浮力', () => {
+  /** 平地世界 + 一池水：y∈[WATER_ROW] 的格为水（整数面 WATER_ROW+1 是水面） */
+  class WaterWorld {
+    isSolid(x: number, y: number, z: number): boolean {
+      void x; void z;
+      return y <= SURFACE - 2; // 水池底比平地低 1 格
+    }
+    getBlock(x: number, y: number, z: number): number {
+      void x; void z;
+      return y === SURFACE - 1 ? 12 : 0; // 12 = BLOCK.WATER
+    }
+  }
+
+  function makeWaterCtx(playerPos: Vec3): CtxBundle {
+    const b = makeCtx(playerPos);
+    (b.ctx.world as unknown as { isSolid: (x: number, y: number, z: number) => boolean }) = new WaterWorld();
+    return b;
+  }
+
+  it('沉入水中的掉落物不再躺底：上浮到水面附近', () => {
+    const p = vec(0, SURFACE + 4, 0); // 玩家在水面上方远处，不触发磁吸
+    const b = makeWaterCtx(p);
+    const d = spawn(b.ctx, b.entities, vec(2.5, SURFACE - 1, 2.5), { key: 'ITEM_SAND', count: 1 });
+
+    advance(b, 240); // 4 秒
+    expect(d.dead).toBe(false);
+    // 已从水底浮到水面附近（水面整数面 = SURFACE，即水格 y=SURFACE-1 的顶面）
+    expect(d.pos.y).toBeGreaterThan(SURFACE - 1);
+  });
+
+  it('水底掉落物 + 玩家浮在水面：进入磁吸范围后被拾取', () => {
+    const p = vec(0, SURFACE + 0.5, 0); // 玩家浮在水面（脚底略高于水面）
+    const b = makeWaterCtx(p);
+    const d = spawn(b.ctx, b.entities, vec(p.x + 0.3, SURFACE - 1, p.z), { key: 'ITEM_DIRT', count: 1 });
+
+    advance(b, 180);
+    expect(b.pickup.calls.length).toBeGreaterThanOrEqual(1);
+    expect(d.dead).toBe(true);
+  });
+
+  it('getBlock 依赖 this 的世界（main 直传 World 实例的真实形态）：tick 不炸、水判定生效', () => {
+    // 真 World.getBlock 读写 this.chunks——isInWater 若把方法拆成裸函数调用
+    //（const gb = w.getBlock; gb(...)），this 为 undefined 每帧抛错，
+    // guard 吞掉后磁吸/拾取全部失效（实机踩坑：掉落物永远捡不起来）。
+    // 可选链调用 ctx.world.getBlock?.() 保持 this；此处用 this 守卫防回归。
+    class RealLikeWorld {
+      cells = new Set<string>();
+      isSolid(x: number, y: number, z: number): boolean {
+        void x; void z;
+        return y <= SURFACE - 2;
+      }
+      getBlock(x: number, y: number, z: number): number {
+        if (!this.cells) throw new TypeError('this 丢失');
+        return this.cells.has(`${x},${y},${z}`) ? 12 : 0;
+      }
+    }
+    const p = vec(0, SURFACE + 4, 0);
+    const b = makeCtx(p);
+    const w = new RealLikeWorld();
+    w.cells.add('2,9,2'); // 掉落物所在格 = 水
+    (b.ctx.world as unknown as RealLikeWorld) = w; // main 的真实形态：实例本体直传
+    const d = spawn(b.ctx, b.entities, vec(2.5, SURFACE - 1, 2.5), { key: 'ITEM_SAND', count: 1 });
+
+    expect(() => advance(b, 120)).not.toThrow();
+    expect(d.dead).toBe(false); // 掉落物活着（浮在水中，未被 4 格外的玩家吸走）
+    expect(d.pos.y).toBeGreaterThan(SURFACE - 1); // 且已浮向水面（水判定真正生效）
+  });
 });

@@ -1,20 +1,27 @@
-// 掉落物实体：物理落地 + 弹跳 + 磁吸拾取 + 同类合堆 + 寿命回收（T43）
+// 掉落物实体：物理落地 + 弹跳 + 水浮力 + 磁吸拾取 + 同类合堆 + 寿命回收（T43）
 // 视觉由渲染层挂钩（见 entity.ts 的 attachView/detachView），本文件零渲染依赖。
 
 import { GRAVITY } from '../core/constants';
 import type { ItemStack, Vec3 } from '../core/types';
+import { BLOCK } from '../blocks/registry';
 import { moveWithCollisions } from '../physics/collide';
 import { Entity, type EntityCtx } from './entity';
 
 /** 寿命（秒）：超过后 despawn（dead=true，由外部从列表移除） */
 export const DROP_LIFETIME_S = 300;
-/** 距玩家该距离内开始磁吸 */
+/** 距玩家该距离内开始磁吸（水平半径） */
 export const MAGNET_RADIUS = 1.5;
+/** 磁吸的垂直高差上限（格）：与水平半径解耦——水底/坑底/头顶洞里的掉落物
+ *  与玩家脚底常差 1.5~2.5 格，复用水平半径会把它们永远锁在可达范围外 */
+export const MAGNET_VERT_RANGE = 2.5;
 /** 触发拾取请求的水平距离 */
 export const PICKUP_RADIUS = 0.6;
-/** 拾取/磁吸的垂直高差容差（格）：台阶上下 1 格内都可拾（旧版 3D 距离判定
+/** 拾取的垂直高差容差（格）：台阶上下 1.5 格内都可拾（旧版 3D 距离判定
  *  会把高差顶出半径——走过去永远差一点捡不起来） */
-export const PICKUP_VERT_TOLERANCE = 1.2;
+export const PICKUP_VERT_TOLERANCE = 1.6;
+/** 水中上浮速度（格/s）：掉落物沉底后玩家隔着 1.5+ 格水永远够不着，
+ *  浮到水面即可进入磁吸范围 */
+const WATER_FLOAT_SPEED = 1.2;
 /** 同 key 合堆距离 */
 export const MERGE_RADIUS = 0.5;
 /** 磁吸飞行速度上限（格/s）：位移式吸附的每秒移动距离 */
@@ -75,10 +82,29 @@ export class DropEntity extends Entity {
     this.mergeNearby(ctx);
   }
 
+  /** 所在格是否为水（ctx.world 未注入 getBlock 时视为不在水中——测试 mock 兼容）。
+   *  必须用 `obj.fn?.()` 可选链方法调用：真 World.getBlock 依赖 this.chunks，
+   *  拆成裸函数调用会丢 this 每帧抛错（guard 吞掉后磁吸/拾取全部失效）。 */
+  private isInWater(ctx: EntityCtx): boolean {
+    return (
+      ctx.world.getBlock?.(
+        Math.floor(this.pos.x),
+        Math.floor(this.pos.y + 0.1),
+        Math.floor(this.pos.z),
+      ) === BLOCK.WATER
+    );
+  }
+
   /** 重力 + moveWithCollisions + 落地弹跳（保留 40% 能量反向弹起）+ 水平摩擦 */
   private moveAndBounce(dt: number, ctx: EntityCtx): void {
-    this.vel.y += GRAVITY * dt;
-    if (this.vel.y < TERMINAL_FALL_SPEED) this.vel.y = TERMINAL_FALL_SPEED;
+    if (this.isInWater(ctx)) {
+      // 水中：浮力抵消重力，垂直速度指数逼近上浮速度——掉落物不再沉底，
+      // 浮到水面进入磁吸范围（稳态为水面轻微起伏，视觉上即「漂浮物」）
+      this.vel.y += (WATER_FLOAT_SPEED - this.vel.y) * Math.min(1, dt * 5);
+    } else {
+      this.vel.y += GRAVITY * dt;
+      if (this.vel.y < TERMINAL_FALL_SPEED) this.vel.y = TERMINAL_FALL_SPEED;
+    }
 
     const impactVy = this.vel.y; // 冲击速度须在碰撞求解前捕获（碰撞会把 vel.y 清零）
     const prevOnGround = this.wasOnGround;
@@ -105,9 +131,10 @@ export class DropEntity extends Entity {
     const dy = ctx.playerPos.y - this.pos.y;
     const dz = ctx.playerPos.z - this.pos.z;
     const horiz = Math.hypot(dx, dz);
-    // 水平圆盘 + 垂直容差判定（原 3D 距离会把「上下差 1 格的台阶/坡地」顶出
-    // 半径外——掉落物卡在边缘来回抖、永远差一点捡不起来）
-    if (horiz >= MAGNET_RADIUS || Math.abs(dy) >= MAGNET_RADIUS) return false;
+    // 水平圆盘 + 独立垂直上限判定（原 3D 距离会把「上下差 1 格的台阶/坡地」顶出
+    // 半径外——掉落物卡在边缘来回抖、永远差一点捡不起来；垂直阈值放宽到 2.5
+    // 覆盖水底/坑底/头顶洞场景）
+    if (horiz >= MAGNET_RADIUS || Math.abs(dy) >= MAGNET_VERT_RANGE) return false;
     if (horiz <= PICKUP_RADIUS && Math.abs(dy) <= PICKUP_VERT_TOLERANCE) return false; // 交给拾取
 
     const d = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6);

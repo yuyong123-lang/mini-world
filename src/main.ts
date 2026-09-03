@@ -1091,7 +1091,16 @@ async function boot(): Promise<void> {
     guard('drops-tick', () => {
       for (const d of drops) d.tick(dt, entityCtx);
     });
-    for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
+    // 死亡回收必须在此处一并摘除视图：syncDropViews 在本循环之后遍历的已是
+    // 干净数组——若等它清理，dead 实体先被 splice，mesh 永远留在场景里
+    //（表现为「捡起后土块还浮在原地」）。
+    for (let i = drops.length - 1; i >= 0; i--) {
+      if (drops[i].dead) {
+        const v = drops[i].detachView() as { mesh: import('three').Mesh } | null;
+        if (v) renderer.scene.remove(v.mesh);
+        drops.splice(i, 1);
+      }
+    }
 
     // ---- 箭投射物 tick + 清理（命中实体/方块在 ArrowEntity.tick 内部处理）----
     guard('arrows', () => {

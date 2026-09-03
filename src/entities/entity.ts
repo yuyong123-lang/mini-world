@@ -35,8 +35,9 @@ export interface DropLike {
  * drops 数组含本实体自身，遍历方（如合堆）须排除 self。
  */
 export interface EntityCtx {
-  /** 体素实心查询（World.isSolid 满足此签名，契约 §7/§10） */
-  world: SolidQuery;
+  /** 体素实心查询（World.isSolid 满足此签名，契约 §7/§10）；
+   *  getBlock 为可选注入（World 已有）：掉落物判水浮力用，测试 mock 可缺省 */
+  world: SolidQuery & { getBlock?(x: number, y: number, z: number): number };
   /** 磁吸目标：玩家脚底中心坐标 */
   playerPos: Vec3;
   /**
