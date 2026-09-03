@@ -22,7 +22,7 @@ describe('方块注册表', () => {
     expect(BlockRegistry.byKey('BEDROCK').hardness).toBe(-1);
   });
 
-  it('34 省扩展方块抽查（37..46）：属性与 GLASS 同型的幕墙 + 全部 drop:null', () => {
+  it('34 省扩展方块抽查（37..46）：属性与 GLASS 同型的幕墙 + 全部有掉落', () => {
     const keys = [
       'WHITE_STONE', 'RED_BRICK', 'BLUE_TILE', 'GREEN_TILE', 'DARK_TILE',
       'CONCRETE', 'GLASS_CURTAIN', 'DARK_WOOD', 'THATCH', 'PASTEL_WALL',
@@ -32,7 +32,8 @@ describe('方块注册表', () => {
       expect(def.id, key).toBe(BLOCK[key]);
       expect(def.id, key).toBe(37 + i);
       expect(def.solid, key).toBe(true);
-      expect(def.drop, key).toBeNull();
+      // 挖了要能放回去：掉落物 key 必须存在（可放置配对由 dig-place-loop.test 锁定）
+      expect(def.drop, key).toBe(`ITEM_${key}`);
     });
     // 幕墙玻璃：字段模式与 GLASS 完全一致（无 liquid/transparent/emissive）
     const curtain = BlockRegistry.byKey('GLASS_CURTAIN');

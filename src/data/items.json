@@ -74,6 +74,17 @@
   { "key": "ITEM_BAMBOO_PLANK", "name": "竹板", "stackMax": 64, "place": 28, "iconTile": 73 },
   { "key": "ITEM_SPRUCE_LOG", "name": "云杉木", "stackMax": 64, "place": 34, "iconTile": 79 },
 
+  { "key": "ITEM_WHITE_STONE", "name": "汉白玉", "stackMax": 64, "place": 37, "iconTile": 98 },
+  { "key": "ITEM_RED_BRICK", "name": "红砖", "stackMax": 64, "place": 38, "iconTile": 99 },
+  { "key": "ITEM_BLUE_TILE", "name": "蓝琉璃", "stackMax": 64, "place": 39, "iconTile": 100 },
+  { "key": "ITEM_GREEN_TILE", "name": "绿琉璃", "stackMax": 64, "place": 40, "iconTile": 101 },
+  { "key": "ITEM_DARK_TILE", "name": "黛瓦", "stackMax": 64, "place": 41, "iconTile": 102 },
+  { "key": "ITEM_CONCRETE", "name": "混凝土", "stackMax": 64, "place": 42, "iconTile": 103 },
+  { "key": "ITEM_GLASS_CURTAIN", "name": "幕墙玻璃", "stackMax": 64, "place": 43, "iconTile": 104 },
+  { "key": "ITEM_DARK_WOOD", "name": "深色木", "stackMax": 64, "place": 44, "iconTile": 105 },
+  { "key": "ITEM_THATCH", "name": "茅草", "stackMax": 64, "place": 45, "iconTile": 106 },
+  { "key": "ITEM_PASTEL_WALL", "name": "粉彩墙", "stackMax": 64, "place": 46, "iconTile": 107 },
+
   { "key": "ITEM_BANANA", "name": "芭蕉", "stackMax": 64, "food": { "hunger": 3 }, "iconTile": 83 },
   { "key": "ITEM_TEA_LEAF", "name": "茶叶", "stackMax": 64, "food": { "hunger": 1 }, "iconTile": 84 },
   { "key": "ITEM_GRAPE", "name": "葡萄", "stackMax": 64, "food": { "hunger": 2 }, "iconTile": 85 },
