@@ -140,13 +140,13 @@ UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/
 
 本项目采用**多 Agent 波次化并发**开发（波内多 Agent 并发：文件所有权互斥 + 契约先行，波末串行集成冒烟）：
 
-- 基础版：28 张任务卡分 11 个波次，详见 [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md)
-- **34 省扩展**：8 个波次（W0 契约波 → W1-W6 分地理组分波 → W7 终验），任务卡见 [docs/tasks/w0-contract.md](docs/tasks/w0-contract.md) ~ [w7-final.md](docs/tasks/w7-final.md)
+- 基础版：28 张任务卡分 11 个波次，详见 [执行总调度表](docs/knowledge/01-项目层/02-核心流程/EXECUTION_PLAN.md)
+- **34 省扩展**：8 个波次（W0 契约波 → W1-W6 分地理组分波 → W7 终验），任务卡见 [w0-contract.md](docs/knowledge/03-资产层/02-技术方案/w0-contract.md) ~ [w7-final.md](docs/knowledge/03-资产层/02-技术方案/w7-final.md)（全部分布在 [03-资产层/02-技术方案](docs/knowledge/03-资产层/02-技术方案/)）
 
-- 设计文档：[docs/architecture.md](docs/architecture.md)
-- 接口契约：[docs/contracts/interfaces.md](docs/contracts/interfaces.md)
-- 协作规则：[docs/contracts/conventions.md](docs/contracts/conventions.md)
-- 任务卡：[docs/tasks/](docs/tasks/)
+- 设计文档：[架构设计 architecture.md](docs/knowledge/01-项目层/03-架构设计/architecture.md)
+- 接口契约：[冻结接口契约 interfaces.md](docs/knowledge/02-技术层/05-接口文档/interfaces.md)
+- 协作规则：[协作规则与 DoD conventions.md](docs/knowledge/02-技术层/03-编码规范/conventions.md)
+- 知识库总览：[docs/knowledge/index.md](docs/knowledge/index.md)（项目层 / 技术层 / 资产层 / 原始层四层结构）
 
 ## 构建与测试
 
@@ -160,6 +160,6 @@ npm run preview # 预览生产构建
 
 1. `src/data/regions/parts/<组>.ts` 加一条 `RegionDef`（地形参数 / 树表 / 结构表 / 动物权重 / 氛围色）——`index.ts` 聚合导出自动生效
 2. 选区地图：34 省已由真实省界数据（`src/ui/chinaGeo.ts`，DataV GeoAtlas 简化内嵌）矢量渲染，新区域无需改图；`regionPickerData.ts` 的硬校验会自动把关数据完整性
-3. 标志建筑：`src/world/buildings/<组>.ts` 写 stamp 函数（工具见 `buildings/kit.ts`，铁律见 `docs/contracts/buildings.md`）；kind 类型与四张配置表在 `data/regions/index.ts` 与 `world/structures.ts` 登记一次
+3. 标志建筑：`src/world/buildings/<组>.ts` 写 stamp 函数（工具见 `buildings/kit.ts`，铁律见 `docs/knowledge/02-技术层/05-接口文档/buildings.md`）；kind 类型与四张配置表在 `data/regions/index.ts` 与 `world/structures.ts` 登记一次
 4. 需要新方块时走三点注册：`blocks.json` → `registry.ts BLOCK` 表 → `atlas.ts`（ATLAS_TILES + PAINTER_TABLE）；若要可挖可放，再在 `items.json` 配 `ITEM_*` 掉落物品——`tests/dig-place-loop.test.ts` 会穷举校验这条数据闭环
 5. `tests/regions/<组>.test.ts` 补特征断言（确定性 / 群系 / 特征方块）——结构与跨 chunk 一致性测试由 `tests/structures.test.ts` 按 REGIONS 表自动派生，无需手写
