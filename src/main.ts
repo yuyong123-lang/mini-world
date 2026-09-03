@@ -340,6 +340,13 @@ async function boot(): Promise<void> {
     now: () => performance.now(),
     tryPickup: (d) => {
       const stack = d.stack;
+      // 手持位为空时拾取直接入手：挖到的第一块方块立刻可右键放置，
+      // 不必再开背包挪到快捷栏（手持位被占时仍按常规槽序入包）。
+      if (!inv.heldItem()) {
+        inv.setSlot(inv.hotbarIndex, { ...stack });
+        bus.emit('pickup', { key: stack.key, count: stack.count });
+        return true;
+      }
       const remain = inv.add({ ...stack });
       if (remain === 0) {
         bus.emit('pickup', { key: stack.key, count: stack.count });
@@ -358,6 +365,15 @@ async function boot(): Promise<void> {
     const def = BlockRegistry.get(blockId);
     if (!def.drop) return null;
     return { key: def.drop, count: 1 };
+  }
+
+  /** 第一个装着「可放置物品」的槽位序号（快捷栏 0..8 优先，再主背包）；无则 -1 */
+  function firstPlaceableSlot(): number {
+    for (let i = 0; i < inv.slots.length; i++) {
+      const s = inv.slots[i];
+      if (s && ItemRegistry.has(s.key) && ItemRegistry.get(s.key).place !== undefined) return i;
+    }
+    return -1;
   }
 
   bus.on('pickup', ({ key, count }) => {
@@ -422,9 +438,20 @@ async function boot(): Promise<void> {
   });
 
   interactor.onPlace((pos) => {
-    const held = inv.heldItem();
+    let held = inv.heldItem();
+    // 空手右键但背包里带着可放置方块 → 自动把最近的一组换到手上再放。
+    // 「挖了却放不出」最常见的形态就是东西在包里、不在手上——一步消掉这个摩擦。
     if (!held) {
-      hud.showToast('手持空位——按 E 打开背包');
+      const found = firstPlaceableSlot();
+      if (found >= 0) {
+        inv.swapSlots(found, inv.hotbarIndex);
+        held = inv.heldItem();
+        const autoName = ItemRegistry.get(held!.key).name;
+        hud.showToast(`已自动手持 ${autoName}`);
+      }
+    }
+    if (!held) {
+      hud.showToast('手持空位——挖到的方块会自动进背包');
       return;
     }
     const itemDef = ItemRegistry.has(held.key) ? ItemRegistry.get(held.key) : null;
@@ -433,7 +460,10 @@ async function boot(): Promise<void> {
       hud.showToast('当前物品不可放置');
       return;
     }
-    if (world.getBlock(pos.x, pos.y, pos.z) !== BLOCK.AIR) return;
+    // 目标格须为空才能放；但水不算占位——水边/水下放置替换水源（MC 语义），
+    // 否则准星 prev 格常是水，右键永远被静默拒绝，症状就是「方块放不出去」。
+    const occupant = world.getBlock(pos.x, pos.y, pos.z);
+    if (occupant !== BLOCK.AIR && occupant !== BLOCK.WATER) return;
     // 防自埋：目标格不得与玩家 AABB（0.6 宽 × 1.8 高，脚底中心锚点）相交
     const px = player.pos.x;
     const py = player.pos.y;
@@ -515,11 +545,29 @@ async function boot(): Promise<void> {
       void document.exitPointerLock?.();
     }
   });
+  // ---- 快捷栏选择：数字键 / 滚轮。切换即让手中物品「抬起展示一下」----
+  function selectHotbar(index: number): void {
+    const next = ((index % 9) + 9) % 9; // wrap 0..8
+    if (next === inv.hotbarIndex) return;
+    inv.hotbarIndex = next;
+    fpArm.setHeld(inv.heldItem(), true); // show 动画：切换有可见反馈
+    bus.emit('invChanged', {});
+  }
+
   window.addEventListener('keydown', (e) => {
     if (!/^Digit[1-9]$/.test(e.code)) return;
-    inv.hotbarIndex = Number(e.code.slice(5)) - 1;
-    bus.emit('invChanged', {});
+    selectHotbar(Number(e.code.slice(5)) - 1);
   });
+
+  // 滚轮切换快捷栏（仅指针锁定中；与 MC 手感一致：下滚 = 右移一格）
+  window.addEventListener(
+    'wheel',
+    (e) => {
+      if (!document.pointerLockElement) return;
+      selectHotbar(inv.hotbarIndex + (e.deltaY > 0 ? 1 : -1));
+    },
+    { passive: true },
+  );
   document.addEventListener('pointerlockchange', () => {
     const lockHint = document.getElementById('lock-hint');
     if (!document.pointerLockElement) {
