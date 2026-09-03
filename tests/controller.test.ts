@@ -272,3 +272,54 @@ describe('游泳物理：默认漂浮在水面', () => {
     expect(p.vel.y).toBeLessThan(-0.3); // 全重力生效
   });
 });
+
+describe('指针锁定与视角控制（回归）', () => {
+  /** 最小 DOM stub：可记录监听器，pointerLockElement 可指定 */
+  function installDomStub(lockElement: unknown): { listeners: Map<string, (e: unknown) => void>; restore: () => void } {
+    const g = globalThis as unknown as { document?: unknown; window?: unknown };
+    const savedDoc = g.document;
+    const savedWin = g.window;
+    const listeners = new Map<string, (e: unknown) => void>();
+    g.document = {
+      pointerLockElement: lockElement,
+      addEventListener: (type: string, fn: (e: unknown) => void) => void listeners.set(type, fn),
+      removeEventListener: () => {},
+    };
+    g.window = { addEventListener: () => {} };
+    return { listeners, restore: () => { g.document = savedDoc; g.window = savedWin; } };
+  }
+
+  it('bind 时锁定已成立（auto lock 先于 bind）→ locked 对齐，mousemove 视角生效', () => {
+    const app = {
+      addEventListener: () => {},
+      requestPointerLock: () => {},
+    } as unknown as HTMLElement;
+    const { listeners, restore } = installDomStub(app); // pointerLockElement === app：锁定早已成立
+    try {
+      const p = new PlayerController();
+      p.bind(app);
+      // 锁定态生效：向下 movementY=500 → pitch ≈ -1.1 rad（未触底钳制）
+      listeners.get('mousemove')!({ movementX: 0, movementY: 500 });
+      expect(p.pitch).toBeLessThan(-1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('bind 时未锁定（pointerLockElement 为 null）→ mousemove 不改视角', () => {
+    const app = {
+      addEventListener: () => {},
+      requestPointerLock: () => {},
+    } as unknown as HTMLElement;
+    const { listeners, restore } = installDomStub(null);
+    try {
+      const p = new PlayerController();
+      p.bind(app);
+      listeners.get('mousemove')!({ movementX: 300, movementY: 500 });
+      expect(p.pitch).toBe(0);
+      expect(p.yaw).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+});

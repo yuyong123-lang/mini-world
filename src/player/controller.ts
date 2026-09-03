@@ -124,6 +124,12 @@ export class PlayerController implements PhysicsBody {
     if (this.boundRoot === domRoot) return;
     this.boundRoot = domRoot;
 
+    // 对齐既有锁定态：main boot 的「进入世界自动锁定」（lockPointer）先于本 bind
+    // 执行——pointerlockchange 在下面的监听注册前就已发出，只靠事件会把 locked
+    // 永久留在 false，mousemove 视角控制全灭（症状：进世界后视角转不动，
+    // 手动解锁再锁定一次才恢复）。绑定即对齐，不再依赖错过的事件。
+    this.locked = document.pointerLockElement === domRoot;
+
     domRoot.addEventListener('click', (e) => {
       // 面板打开期间：门控返回 true → 点击永远不锁定（鼠标保持可用）
       if (this.pointerLockGate?.()) return;
