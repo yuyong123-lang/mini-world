@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "project-knowledge-hierarchy": {
+      "source": "wuchubuzai2018/expert-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/project-knowledge-hierarchy/SKILL.md",
+      "computedHash": "f02c8a4985a170ae191684fd6d95e4ed52db4c2705d4f1d386b0522c96b62de2"
+    }
+  }
+}
