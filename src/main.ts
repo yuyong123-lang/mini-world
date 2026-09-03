@@ -270,6 +270,7 @@ async function boot(): Promise<void> {
   const fpArm = createFirstPersonArms({
     skin: Number.parseInt(cosmetics.skin.slice(1), 16),
     shirt: Number.parseInt(cosmetics.shirt.slice(1), 16),
+    getAtlas: () => renderer.atlasTexture, // 手持物贴图懒取（切换方块/物品时实时定位 tile）
   });
   renderer.camera.add(fpArm.group);
 
@@ -1124,7 +1125,14 @@ async function boot(): Promise<void> {
     } else {
       miningSwing = 0.3; // 备满：一开挖立刻出第一拳
     }
-    guard('fp-arm', () => fpArm.update(dt));
+    guard('fp-arm', () => {
+      // 传入水平移速驱动走路摆臂（含空中/水中的惯性速度——摆臂自然连续）
+      const moveSpeed = Math.hypot(player.vel.x, player.vel.z);
+      fpArm.update(dt, moveSpeed);
+      // 手持物每帧兜底同步：拾取入手/放置消耗/背包挪动后自动换模型；
+      // key 未变化时 setHeld 是 no-op（数字键/滚轮切换的展示动画由 selectHotbar 触发）
+      fpArm.setHeld(inv.heldItem());
+    });
     // 被击生物血条：3 秒内每帧刷新（目标死亡或超时即隐藏）
     if (hitMob) {
       if (hitMob.e.dead || performance.now() > hitMob.until) {
