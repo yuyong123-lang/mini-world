@@ -2,7 +2,7 @@
 
 网页版 3D 体素沙盒游戏 —— **中国地图选区 · 34 省级行政区风土世界** / 掘地建造 / 资源合成 / 熔炉冶炼 / 昼夜生存 / 狩猎战斗，**零外部素材**（纹理程序化生成、音效 WebAudio 实时合成；选区地图内嵌简化省界数据，来源 [DataV.GeoAtlas](https://geo.datav.aliyun.com/)）。
 
-![tech](https://img.shields.io/badge/TypeScript-strict-blue) ![three](https://img.shields.io/badge/three.js-0.185-orange) ![tests](https://img.shields.io/badge/tests-977_pass-brightgreen) ![vite](https://img.shields.io/badge/Vite-7-purple)
+![tech](https://img.shields.io/badge/TypeScript-strict-blue) ![three](https://img.shields.io/badge/three.js-0.185-orange) ![tests](https://img.shields.io/badge/tests-966_pass-brightgreen) ![vite](https://img.shields.io/badge/Vite-7-purple)
 
 ## 快速开始
 
@@ -22,13 +22,22 @@ npm run dev        # 打开浏览器 http://localhost:5173
 | 空格 | 跳跃 / **水中上浮（可蹿出水面跳上岸）** |
 | Shift+W | 疾跑（消耗饥饿） |
 | Shift（水中） | **下潜**（水底 / 冰面下探索；水中不按键会自动漂浮在水面） |
-| **左键单击** | 攻击生物（左右拳交替出拳，命中显示血条）/ 按住挖掘方块（裂纹+碎屑特效） |
-| **右键** | 放置方块 / 吃食物 / 开工作台 / **开熔炉** / **按住拉弓蓄力、松开发射** |
-| 1~9 | 切换热栏 |
+| **左键单击** | 攻击生物（左右拳交替出拳，命中显示血条）/ 按住挖掘方块（裂纹+碎屑特效）；挖到的方块**自动进背包**（手持位为空时直接入手，立刻可放） |
+| **右键** | 放置方块（手持空时会**自动取出**背包里的可放置方块；**水中也能放**，替换水源）/ 吃食物 / 开工作台 / **开熔炉** / **按住拉弓蓄力、松开发射** |
+| 1~9 / **滚轮** | 切换热栏（切换时手中物品抬起展示一下） |
 | E | 背包 + 2×2 合成 + **护甲装备区** |
 | **V** | 切换第一 / 第三人称（第三人称带走路摆臂动画，装扮可见） |
 | **ESC** | 暂停菜单（继续 / 设置 / **扮 装** / **切换区域** / 重新开始本世界 / 保存退出） |
 | P | 手动保存 |
+
+## 实机截图
+
+| 第一人称五指手（空手自然半握） | 手持方块（挖到即拾回，可立即放置） |
+|---|---|
+| ![第一人称五指手](docs/images/fp-arms-open.png) | ![手持方块](docs/images/fp-held-dirt.png) |
+
+- 掉落物带**水浮力**：掉进水里的东西会浮到水面等你捡；磁吸垂直范围放宽到 2.5 格，水底 / 坑底 / 台阶上下都顺手
+- 手部表现：五指手按持物类型自动切换**握姿**（扣握方块 / 捏持物品），走路摆臂、静止呼吸，出拳左右交替
 
 ## 中国区域世界
 
@@ -96,7 +105,7 @@ npm run dev        # 打开浏览器 http://localhost:5173
 7. **游泳**：落水后自动**漂浮在水面**（不按键不下沉），空格上浮蹿跳、Shift 下潜，入水豁免摔落伤
 8. **生存**：饥饿归零掉血到 1；吃肉 / 苹果 / 区域美食回复；满饥饿自动回血；夜晚刷怪
 9. **存档**：世界改动 / 背包 / 装备 / 熔炉进度 / 所选区域每 10 秒自动保存（+ 退出时 + P 键），随时继续
-10. **旅行打卡**：34 省各有标志性建筑（祈年殿 / 布达拉宫 / 土楼 / 东方明珠……）稀有生成在世界中——换区域探索，集齐各地标
+10. **旅行打卡**：34 省各有标志性建筑（祈年殿 / 布达拉宫 / 土楼 / 东方明珠……）稀有生成在世界中——换区域探索，集齐各地标；**建筑材质都可拆建**（汉白玉 / 红砖 / 琉璃 / 黛瓦 / 茅草……挖掉即掉落可放置物品，拆别人的牌坊也能砌自己的墙）
 11. 摔落伤害、卡方块自救、掉出世界自动送回、防把方块放进自己身体——都替你想好了
 
 ## 技术架构
@@ -110,17 +119,21 @@ npm run dev        # 打开浏览器 http://localhost:5173
 结构生成   32×32 cell 确定性哈希锚点 · **51 种建筑 stamp**（world/buildings/ 分组模块，
            只读哈希+地形公式，跨 chunk 逐位一致）· anchorMargin 按结构半径自适应（≤8）
 物理       分轴扫掠 AABB（玩家/生物/掉落物/箭矢共用求解器，子步防穿墙）· 浮力游泳
+           掉落物水面浮力上浮 + 磁吸拾取（垂直容差 2.5 格，水底/坑底/台阶上下可捡）
 世界调度   流式加载（帧预算 ≤2 chunk/帧）· diff 记录 → localStorage 存档 v2（含区域字段）
 Worker     terragen+mesher 全量入 Web Worker（transferable 零拷贝 + 三重同步降级）
 渲染       Three.js · 全局仅 2 材质 · 视距 6 chunks ≈113 区块 · 60fps · 区域天空/雾/水色 tint
 生物       物种数据表驱动（9 物种：猪/牛/羊/熊猫/大象/孔雀/马/骆驼/虎）· 三态 AI · 区域权重刷怪
+           怪物人形模型（方头/前平伸双臂/走路摆腿摆臂，脚底锚对齐物理 AABB）
 熔炉       燃烧热值 + 烧炼进度（MC 语义）· 状态随存档持久化
 投射物     弓蓄力曲线 → 箭实体（重力弹道 · 子步命中 · 插墙可捡回）
 战斗       近战贴身锥形兜底 · 装备护甲减伤（每点 -4%，上限 20 点）
-美术       启动时 canvas 程序化生成 108+ tile 图集 · 物品/掉落物真实图标 · 双臂第一人称视图
+美术       启动时 canvas 程序化生成 108+ tile 图集 · 物品/掉落物真实图标
+           第一人称五指手：握姿切换（扣握方块/捏持纸片）· 走路摆臂 · 手持物方块/纸片模型
 音效       WebAudio 六音效实时合成（挖/放/受伤/吃/拾取/点击），无素材文件
 UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/熔炉/血条/蓄力条/昼夜钟/暂停菜单/装扮页/诊断 HUD
-测试       vitest 977 用例，引擎层纯函数全覆盖（含跨 chunk 结构一致性硬闸 · 34 区逐区确定性）
+测试       vitest 966 用例，引擎层纯函数全覆盖（含跨 chunk 结构一致性硬闸 · 34 区逐区确定性
+           · 挖取→掉落→拾取→放置数据闭环穷举）
 ```
 
 ## 开发方式
@@ -138,7 +151,7 @@ UI         全 DOM overlay：像素中国地图/热栏/背包(装备区)/合成/
 ## 构建与测试
 
 ```bash
-npm test        # vitest run，977 测试
+npm test        # vitest run，966 测试
 npm run build   # tsc 类型检查 + vite 生产构建（含 worker chunk）
 npm run preview # 预览生产构建
 ```
@@ -148,5 +161,5 @@ npm run preview # 预览生产构建
 1. `src/data/regions/parts/<组>.ts` 加一条 `RegionDef`（地形参数 / 树表 / 结构表 / 动物权重 / 氛围色）——`index.ts` 聚合导出自动生效
 2. 选区地图：34 省已由真实省界数据（`src/ui/chinaGeo.ts`，DataV GeoAtlas 简化内嵌）矢量渲染，新区域无需改图；`regionPickerData.ts` 的硬校验会自动把关数据完整性
 3. 标志建筑：`src/world/buildings/<组>.ts` 写 stamp 函数（工具见 `buildings/kit.ts`，铁律见 `docs/contracts/buildings.md`）；kind 类型与四张配置表在 `data/regions/index.ts` 与 `world/structures.ts` 登记一次
-4. 需要新方块时走三点注册：`blocks.json` → `registry.ts BLOCK` 表 → `atlas.ts`（ATLAS_TILES + PAINTER_TABLE）
+4. 需要新方块时走三点注册：`blocks.json` → `registry.ts BLOCK` 表 → `atlas.ts`（ATLAS_TILES + PAINTER_TABLE）；若要可挖可放，再在 `items.json` 配 `ITEM_*` 掉落物品——`tests/dig-place-loop.test.ts` 会穷举校验这条数据闭环
 5. `tests/regions/<组>.test.ts` 补特征断言（确定性 / 群系 / 特征方块）——结构与跨 chunk 一致性测试由 `tests/structures.test.ts` 按 REGIONS 表自动派生，无需手写
