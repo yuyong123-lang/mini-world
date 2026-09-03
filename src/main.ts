@@ -1249,7 +1249,7 @@ async function boot(): Promise<void> {
   /** 实体视图：动物按物种多盒组合（猪/牛/羊），怪物保持单盒占位 */
   function syncEntityViews(): void {
     for (const a of animals) syncAnimalView(a, a.species, renderer.scene);
-    for (const m of monsters) syncView(m, 0x3c4b3a, 0.6, 1.8);
+    for (const m of monsters) syncView(m);
     syncDropViews();
   }
 
@@ -1328,31 +1328,108 @@ async function boot(): Promise<void> {
     }
   }
 
-  function syncView(
-    e: { pos: Vec3; facingYaw?: number; view: unknown; attachView(v: unknown): void },
-    color: number,
-    w: number,
-    h: number,
-  ): void {
-    type V = { mesh: import('three').Mesh; yaw: number | null };
-    let v = e.view as V | null;
-    if (!v) {
-      void color; void w; void h; // 颜色尺寸占位：真正几何在 buildCreatureMesh
-      v = { mesh: buildCreatureMesh(color, w, h), yaw: null };
-      e.attachView(v);
-      renderer.scene.add(v.mesh);
-    }
-    v.mesh.position.set(e.pos.x, e.pos.y + h / 2, e.pos.z);
-    if (e.facingYaw != null && v.yaw !== e.facingYaw) {
-      v.mesh.rotation.y = e.facingYaw;
-      v.yaw = e.facingYaw;
-    }
+  /** 人形怪物视图：group（脚底锚）+ 腿/臂 pivot（走路摆动用） */
+  interface MonsterView {
+    group: import('three').Group;
+    legL: import('three').Group;
+    legR: import('three').Group;
+    armL: import('three').Group;
+    armR: import('three').Group;
+    yaw: number | null;
   }
 
-  function buildCreatureMesh(color: number, w: number, h: number): import('three').Mesh {
-    const THREE = renderer.gl.domElement.constructor; // noop——three 已由 renderer 引入，直接用命名导入更清晰
-    void THREE;
-    return makeBoxMesh(color, w, h);
+  /** 盒部件：直接摆进 group 局部坐标（BoxGeometry 支持三向独立尺寸） */
+  function part(
+    g: import('three').Group, color: number,
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+  ): void {
+    g.add(partMesh(color, w, h, d, x, y, z));
+  }
+
+  /** part 的实体工厂（拆开以便测试与换色） */
+  function partMesh(
+    color: number, w: number, h: number, d: number,
+    x: number, y: number, z: number,
+  ): import('three').Mesh {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+    mesh.position.set(x, y, z);
+    return mesh;
+  }
+
+  /**
+   * 僵尸人形（替代此前的单盒占位）：绿皮方头（带黑眼）+ 深青衣躯干 +
+   * 前平伸双臂 + 双腿。模型局部 -Z 为面向（与 facingYaw 约定一致），
+   * group 原点 = 脚底中心（总高 1.8 与物理 AABB 对齐）。
+   * 腿 pivot 在髋、臂 pivot 在肩（rotation.x≈+90° 前平伸），走路正弦摆动。
+   */
+  function buildMonsterMesh(): MonsterView {
+    const group = new THREE.Group();
+    const SKIN = 0x5e8c3e;
+    const SHIRT = 0x2f4f4f;
+    const PANTS = 0x2c2c4a;
+
+    const legL = new THREE.Group();
+    legL.position.set(-0.14, 0.78, 0);
+    group.add(legL);
+    legL.add(partMesh(PANTS, 0.22, 0.78, 0.22, 0, -0.39, 0));
+
+    const legR = new THREE.Group();
+    legR.position.set(0.14, 0.78, 0);
+    group.add(legR);
+    legR.add(partMesh(PANTS, 0.22, 0.78, 0.22, 0, -0.39, 0));
+
+    // 躯干 + 头 + 双眼（眼在头前面 -Z 侧）
+    part(group, SHIRT, 0.52, 0.56, 0.26, 0, 1.06, 0);
+    part(group, SKIN, 0.5, 0.46, 0.5, 0, 1.57, 0);
+    part(group, 0x1a1a1a, 0.09, 0.06, 0.02, -0.11, 1.6, -0.26);
+    part(group, 0x1a1a1a, 0.09, 0.06, 0.02, 0.11, 1.6, -0.26);
+
+    // 臂 ×2：pivot 在肩，rotation.x = +90° 把「垂下的臂」转向 -Z 前平伸，微下垂
+    const armL = new THREE.Group();
+    armL.position.set(-0.345, 1.28, 0);
+    group.add(armL);
+    armL.add(partMesh(0x4a6a3a, 0.17, 0.62, 0.17, 0, -0.28, 0));
+    armL.rotation.x = Math.PI / 2 - 0.12;
+
+    const armR = new THREE.Group();
+    armR.position.set(0.345, 1.28, 0);
+    group.add(armR);
+    armR.add(partMesh(0x4a6a3a, 0.17, 0.62, 0.17, 0, -0.28, 0));
+    armR.rotation.x = Math.PI / 2 - 0.12;
+
+    return { group, legL, legR, armL, armR, yaw: null };
+  }
+
+  /** 怪物视图逐帧同步：脚底锚定位 + 朝向旋转 + 走路摆腿/摆臂（按移速归一幅度） */
+  function syncView(e: {
+    pos: Vec3;
+    facingYaw?: number;
+    view: unknown;
+    attachView(v: unknown): void;
+    vel: Vec3;
+  }): void {
+    let v = e.view as MonsterView | null;
+    if (!v) {
+      v = buildMonsterMesh();
+      e.attachView(v);
+      renderer.scene.add(v.group);
+    }
+    // 脚底锚：group 原点即脚底中心，直接对齐实体 pos
+    v.group.position.set(e.pos.x, e.pos.y, e.pos.z);
+    if (e.facingYaw != null && v.yaw !== e.facingYaw) {
+      v.group.rotation.y = e.facingYaw;
+      v.yaw = e.facingYaw;
+    }
+    // 走路摆动：按水平移速归一幅度，腿反相摆、前伸臂微摆（僵尸拖沓感）
+    const speed = Math.hypot(e.vel.x, e.vel.z);
+    const amp = Math.min(1, speed / 3.2);
+    const phase = performance.now() / 1000 * 9;
+    v.legL.rotation.x = Math.sin(phase) * 0.55 * amp;
+    v.legR.rotation.x = -Math.sin(phase) * 0.55 * amp;
+    v.armL.rotation.x = Math.PI / 2 - 0.12 + Math.sin(phase + Math.PI) * 0.14 * amp;
+    v.armR.rotation.x = Math.PI / 2 - 0.12 - Math.sin(phase + Math.PI) * 0.14 * amp;
   }
 
   function cullFarEntities(): void {
